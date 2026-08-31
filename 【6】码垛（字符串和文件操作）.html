@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>工业机器人仿真 v3.0 (Python 基础语法综合实战 - 智能码垛)</title>
+    
+    <!-- 引入 Pyodide 运行环境 -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    <script>
+    async function initPy(){
+      window.pyodide = await loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+      });
+    }
+    initPy();
+    </script>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <style>
+        body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: "Microsoft YaHei", sans-serif; overflow: hidden; background: #222; }
+        
+        /* 1. 顶部栏 */
+        #header {
+            height: 48px; background: #1a1a1a; color: #fff;
+            display: flex; align-items: center; justify-content: space-between; padding: 0 15px;
+            border-bottom: 1px solid #333; box-shadow: 0 2px 10px rgba(0,0,0,0.5); z-index: 50;
+        }
+        
+        .btn-group button {
+            padding: 6px 14px; margin-left: 8px; border: none; border-radius: 4px; 
+            cursor: pointer; font-weight: bold; font-size: 13px; transition: 0.2s;
+            display: inline-flex; align-items: center; gap: 5px;
+        }
+        .btn-run { background: #28a745; color: white; }
+        .btn-run:hover { background: #218838; }
+        .btn-stop { background: #dc3545; color: white; box-shadow: 0 0 5px rgba(220, 53, 69, 0.5); }
+        .btn-stop:hover { background: #c82333; transform: scale(1.05); }
+        .btn-stop:active { transform: scale(0.95); }
+        .btn-reset { background: #6c757d; color: white; }
+        .btn-reset:hover { background: #5a6268; }
+
+        /* 2. 主体布局 */
+        #main { display: flex; flex: 1; height: calc(100vh - 48px); }
+        
+        /* 左侧 Python 编程区 */
+        #python-panel {
+            width: 35%; min-width: 450px; background: #1e1e1e; border-right: 1px solid #333;
+            display: flex; flex-direction: column; padding: 12px; box-sizing: border-box;
+        }
+        .py-header { color: #4fc1ff; font-size: 15px; font-weight: bold; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;}
+        #env-status { font-size: 12px; color: #ffcc00; font-weight: normal; }
+        
+        textarea { 
+            flex: 1; background: #2d2d2d; color: #9cdcfe; font-family: "Courier New", monospace; 
+            font-size: 13px; padding: 10px; border: 1px solid #3f3f3f; border-radius: 4px; resize: none; outline: none; line-height: 1.5;
+        }
+        
+        /* 右侧仿真区 */
+        #simDiv { flex: 1; height: 100%; position: relative; background: #2b2b2b; overflow: hidden; }
+        
+        /* HUD 信息 */
+        #hud {
+            position: absolute; top: 15px; right: 15px;
+            background: rgba(0,0,0,0.7); color: #00ffcc;
+            padding: 10px 15px; border-radius: 4px; pointer-events: none;
+            font-family: monospace; font-size: 14px; border: 1px solid #444;
+            display: flex; flex-direction: column; gap: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <div style="font-size: 16px; font-weight: bold; letter-spacing: 1px; color: #ddd;">
+            🤖 六轴码垛机器人仿真 (Python 字符串与文件实战)
+        </div>
+        <div class="btn-group">
+            <button class="btn-run" onclick="runProgram()">▶ 运行码垛脚本</button>
+            <button class="btn-stop" onclick="stopProgram()">🛑 紧急停止</button>
+            <button class="btn-reset" onclick="resetScene()">↺ 场景复位</button>
+        </div>
+    </div>
+
+    <div id="main">
+        <div id="python-panel">
+            <div class="py-header">
+                <span>🐍 字符串处理与文件I/O脚本（码垛工单）</span>
+                <span id="env-status">环境加载中...</span>
+            </div>
+            
+            <textarea id="py-code" spellcheck="false" disabled>
+robot.log("--- 启动智能码垛系统 ---")
+
+# ==========================================
+# 工位坐标说明（单位：米，机器人坐标系，Y 向上为正）
+# --------------------------------------------------
+# 初始位置: AGV 停在供箱托盘正前方 PARK.pick = (x=2.5, z=-2.0)，朝向 +Z（面向供箱托盘）
+# 供箱托盘中心: (x=2.5,  z=0.4)  —— 2×2×2 预置 8 只料箱
+# 托盘A（任务1 单层码垛）: 中心 (-1.9, z=4.3)  停泊位 PARK[1] = (-1.9, z=1.9)
+# 托盘B（任务2 底层 / 任务3 顶层）: 中心 (0.2, z=4.3)  停泊位 PARK[2,3] = (0.2, z=1.9)
+# 托盘顶面高度 PALLET_TOP = 0.13
+# 料箱尺寸 BOX = (w=0.42, h=0.34, d=0.42)
+# ==========================================
+#
+# 机器人 API 说明:
+#   robot.log(msg)            : 在控制台输出一行日志
+#   robot.drive_to(x, z)      : AGV 自动导航到 (x, z) 停泊位（走相互垂直的直线段）
+#   robot.next_box()          : 读取供箱托盘下一只待取料箱信息（JSON 字符串）
+#   robot.arm_to(x, y, z)     : 机械臂 TCP（末端中心）移动到世界坐标 (x, y, z)
+#   robot.align_grip()        : 腕部回转对正夹爪指面（用于夹取与放置）
+#   robot.gripper(state)      : 夹爪动作
+#                               - "wide"   : 完全张开（取箱前预备）
+#                               - "close"  : 闭合夹紧料箱（同时吸附最近料箱）
+#                               - "narrow" : 微张松爪（箱子原地留下，码放到位）
+#   robot.carry_pose()        : 收拢为搬运预备姿态
+#   robot.task(task_no)       : 读取任务配置（JSON 字符串：name / pallet / park / slots / next）
+#   robot.setup()             : 读取场景全局配置（boxH / palletTop / parkPick / supplyTotal）
+# ==========================================
+
+# 从仿真场景读取工位坐标与箱子参数配置
+# cfg 是字典，包含以下键:
+#   boxH        : 料箱高度（米） 0.34
+#   palletTop   : 托盘顶面高度（米） 0.13
+#   parkPick    : 供箱托盘取箱停泊位 [x, z] = [2.5, -2.0]
+#   supplyTotal : 供箱托盘预置料箱总数 8
+import json
+cfg = json.loads(robot.setup())
+
+# BOX_H : 料箱高度（米），用于计算码放时箱中心 Y 坐标
+BOX_H = cfg["boxH"]
+# TOP_Y : 托盘顶面高度（米），码放时所有箱子的底面都贴在此高度上
+TOP_Y = cfg["palletTop"]
+# APPROACH : 接近/撤离安全高度偏移（米）
+#   取箱时：先下降到 (by + APPROACH) 安全高度，再垂直下探到 by 抓取
+#   码放时：先下降到 (y + APPROACH) 安全高度，再垂直下探到 y 释放
+#   该值越小臂体越贴近箱面/托盘，值越大越安全但臂体伸展更远
+APPROACH = 0.35
+
+robot.log(f"📥 供箱托盘已预置 {cfg['supplyTotal']} 只料箱")
+robot.log("⚙️ 机器人开始按顺序执行码垛作业...")
+
+# 任务清单（按工单顺序定义三个码垛任务）
+#   t_no   : 任务编号（与 robot.task() 一致）
+#   t_name : 任务名（用于日志）
+#   t_count: 本任务要码放的箱子数量
+tasks = [
+    {"no": 1, "name": "单层码垛", "count": 4},
+    {"no": 2, "name": "底层码垛", "count": 2},
+    {"no": 3, "name": "顶层码垛", "count": 2},
+]
+
+# 取箱流程：从供箱托盘取一只箱
+# 步骤:
+#   1) AGV 行驶到供箱托盘停泊位 cfg["parkPick"] = (2.5, -2.0)
+#   2) 查询供箱托盘上按顺序下一只待取料箱（JSON），取出后返回 info
+#   3) 机械臂移动到料箱中心正上方（抬高 APPROACH）
+#   4) 腕部回转对正夹爪指面
+#   5) 垂直下探到料箱中心高度
+#   6) 夹爪闭合（同时吸附该料箱到指垫上）
+#   7) 垂直提起料箱到安全高度
+#   8) 收拢为搬运预备姿态（臂体抬起，避免与供箱托盘碰撞）
+# 返回: True=取到箱；False=供箱托盘已空
+async def fetch_box():
+    await robot.drive_to(cfg["parkPick"][0], cfg["parkPick"][1])   # AGV 驶向供箱托盘停泊位
+    raw = robot.next_box()                                          # 读取下一只待取料箱信息
+    if raw is None:                                                 # 供箱托盘已空
+        robot.log("⚠️ 供箱托盘上已经没有料箱了")
+        return False
+    info = json.loads(raw)                                          # 解析料箱位置 JSON
+    # bx, by, bz : 料箱中心的世界坐标 (x, y, z)
+    bx, by, bz = info["pos"]
+    robot.log(f"🥡 取第 {info['index']} 只料箱（取后剩余 {info['remaining']} 箱）")
+    await robot.arm_to(bx, by + APPROACH, bz)                       # 机械臂对准箱正上方（安全高度）
+    await robot.align_grip()                                        # 腕部回转对正夹爪指面
+    await robot.arm_to(bx, by, bz)                                  # 垂直下探到箱中心
+    await robot.gripper("close")                                    # 闭合夹爪（吸附料箱）
+    await robot.arm_to(bx, by + APPROACH, bz)                       # 垂直提起料箱
+    await robot.carry_pose()                                        # 收拢为搬运姿态
+    return True
+
+# 码放流程：把当前夹持的箱子放到指定任务的下一个槽位上
+# 步骤:
+#   1) 读取任务配置（pallet 中心、停泊位、槽位列表、当前进度）
+#   2) 取出下一个待码放的槽位 [dx, dy, dz]（相对托盘中心的偏移）
+#   3) 计算槽位的世界坐标 (x, y, z)，其中 y = 托盘顶面 + 层高 + 箱高/2
+#   4) AGV 载箱驶向该任务对应的停泊位 PARK[no]
+#   5) 机械臂对准槽位正上方（抬高 APPROACH）
+#   6) 腕部回正对齐托盘方向
+#   7) 垂直下探到槽位
+#   8) 微张夹爪（料箱原地留下，自动核对是否落在槽位上）
+#   9) 抬臂撤离到安全高度
+#  10) 收拢为搬运预备姿态
+async def place_box(task_no):
+    t = json.loads(robot.task(task_no))                              # 读取任务配置
+    # slot = [dx, dy, dz]: 相对托盘中心的偏移
+    #   dx, dz : 水平方向偏移（米）
+    #   dy     : 层高偏移（米），用于堆叠第二层
+    slot = t["slots"][t["next"]]
+    # 计算槽位的世界坐标
+    x = t["pallet"][0] + slot[0]                                     # 槽位世界 X
+    y = TOP_Y + slot[1] + BOX_H / 2                                  # 槽位世界 Y（箱中心高度）
+    z = t["pallet"][1] + slot[2]                                     # 槽位世界 Z
+    await robot.drive_to(t["park"][0], t["park"][1])                 # AGV 载箱驶向停泊位
+    await robot.arm_to(x, y + APPROACH, z)                           # 机械臂对准槽位正上方
+    await robot.align_grip()                                         # 腕部回正对齐托盘
+    await robot.arm_to(x, y, z)                                      # 垂直下探到槽位
+    await robot.gripper("narrow")                                    # 微张松爪，箱子留在槽位
+    await robot.arm_to(x, y + APPROACH, z)                           # 抬臂撤离
+    await robot.carry_pose()                                         # 收拢为搬运预备姿态
+
+# 主循环：按任务清单顺序逐任务执行码垛
+# supply_empty : 供箱托盘是否已取空（True 时停止所有作业）
+supply_empty = False
+for t in tasks:
+    if supply_empty:
+        break
+    t_no = t["no"]
+    t_name = t["name"]
+    t_count = t["count"]
+    # info: 任务静态配置（用于查询该任务最多能码放多少箱）
+    info = json.loads(robot.task(t_no))
+    robot.log(f"--- 开始任务{t_no}：{t_name}（码放 {t_count} 箱）---")
+    # 实际码放箱数 = min(本任务计划箱数, 该任务可用槽位数)
+    for i in range(min(t_count, len(info["slots"]))):
+        if not await fetch_box():                                   # 取箱失败（供箱已空）
+            supply_empty = True
+            robot.log("🛑 料箱不足，码垛作业中止")
+            break
+        await place_box(t_no)                                       # 码放刚取到的箱
+
+robot.log("✅ 全部码垛任务已完成")
+            </textarea>
+        </div>
+
+        <div id="simDiv">
+            <div id="hud">
+                <div>🔧 状态: <span id="sysState" style="color:white">待机</span></div>
+                <div>📦 码垛: <span id="taskState">T1:0/4  T2:0/2  T3:0/2</span></div>
+                <div>📥 供箱: <span id="supplyState">8</span> 箱</div>
+                <div>🤏 夹爪: <span id="gripState">🟢 张开</span></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // =========================================
+    // 1. 全局控制变量
+    // =========================================
+    let isRunning = false; 
+    let stopSignal = false; 
+
+    const logDiv = document.createElement('div');   // 日志窗口已移除，保留兼容引用
+    const stateDiv = document.getElementById('sysState');
+
+    function log(msg, color='#ccc') {
+        console.log(msg);
+        logDiv.innerHTML += `<div style="color:${color}">> ${msg}</div>`;
+        logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function checkStop() {
+        if (stopSignal) throw new Error("用户强制停止！");
+    }
+
+    // =========================================
+    // 2. Three.js 场景搭建
+    // =========================================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x2b2b2b);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(-8.5, 10.5, 9);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    document.getElementById('simDiv').appendChild(renderer.domElement);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.physicallyCorrectLights = true;
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0.3, 0.7, 1.3);   // 观察目标：码垛作业区中心（供箱托盘 ↔ 两个平行码垛托盘）
+
+    // === 环境贴图（PBR 金属反射用） ===
+    function createEnvTexture() {
+        const c = document.createElement('canvas');
+        c.width = 512; c.height = 256;
+        const ctx = c.getContext('2d');
+        const grad = ctx.createLinearGradient(0, 0, 0, 256);
+        grad.addColorStop(0, '#667788');
+        grad.addColorStop(0.4, '#556677');
+        grad.addColorStop(0.5, '#445566');
+        grad.addColorStop(1, '#2a3848');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 512, 256);
+        ctx.fillStyle = 'rgba(255,250,230,0.4)';
+        ctx.beginPath(); ctx.arc(80, 50, 60, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(200,220,255,0.25)';
+        ctx.beginPath(); ctx.arc(380, 70, 45, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.beginPath(); ctx.arc(250, 40, 30, 0, Math.PI*2); ctx.fill();
+        const tex = new THREE.CanvasTexture(c);
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        return tex;
+    }
+    const envTex = createEnvTexture();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    scene.environment = pmrem.fromEquirectangular(envTex).texture;
+
+    // === 灯光系统 ===
+    const hemiLight = new THREE.HemisphereLight(0x88aacc, 0x3a3a3a, 0.45);
+    scene.add(hemiLight);
+
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.position.set(-10, 18, 8);
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 2048;
+    mainLight.shadow.mapSize.height = 2048;
+    mainLight.shadow.camera.near = 1;
+    mainLight.shadow.camera.far = 50;
+    mainLight.shadow.camera.left = -15;
+    mainLight.shadow.camera.right = 15;
+    mainLight.shadow.camera.top = 15;
+    mainLight.shadow.camera.bottom = -15;
+    mainLight.shadow.bias = -0.0005;
+    scene.add(mainLight);
+
+    const fillLight = new THREE.DirectionalLight(0xaaccff, 0.35);
+    fillLight.position.set(8, 10, -5);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffddaa, 0.3);
+    rimLight.position.set(5, 5, -12);
+    scene.add(rimLight);
+
+    // === 程序化纹理 ===
+    function createBrushedMetalTex(hex) {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 256;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = hex;
+        ctx.fillRect(0, 0, 256, 256);
+        for (let i = 0; i < 600; i++) {
+            const y = Math.random() * 256;
+            ctx.strokeStyle = `rgba(255,255,255,${Math.random() * 0.12})`;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+        }
+        for (let i = 0; i < 300; i++) {
+            const y = Math.random() * 256;
+            ctx.strokeStyle = `rgba(0,0,0,${Math.random() * 0.08})`;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    }
+    function createHazardTex() {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 64;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, 256, 64);
+        ctx.fillStyle = '#ffcc00';
+        for (let i = -64; i < 320; i += 48) {
+            ctx.beginPath();
+            ctx.moveTo(i, 0); ctx.lineTo(i + 32, 0);
+            ctx.lineTo(i + 64, 64); ctx.lineTo(i + 32, 64);
+            ctx.closePath(); ctx.fill();
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    }
+    const brushedYellowTex = createBrushedMetalTex('#e89500');
+    const brushedGreyTex = createBrushedMetalTex('#888888');
+    const hazardTex = createHazardTex();
+
+    // === PBR 材质库 ===
+    const mats = {
+        floor: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.7 }),
+        table: new THREE.MeshStandardMaterial({ color: 0xe0e0e0 }),
+        box: new THREE.MeshStandardMaterial({ color: 0xd63031 }),
+        darkMetal: new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.6 }),
+        armYellow: new THREE.MeshStandardMaterial({ color: 0xe89500, metalness: 0.5, roughness: 0.35, map: brushedYellowTex }),
+        darkStruct: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.4 }),
+        jointHousing: new THREE.MeshStandardMaterial({ color: 0x3a3a3a, metalness: 0.5, roughness: 0.5 }),
+        brushedAlu: new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.9, roughness: 0.25, map: brushedGreyTex }),
+        blackPlastic: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.1, roughness: 0.65 }),
+        tireRubber: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.05, roughness: 0.85 }),
+        hubSilver: new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.2 }),
+        gripperPad: new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.05, roughness: 0.9 }),
+        hazard: new THREE.MeshStandardMaterial({ map: hazardTex, metalness: 0.3, roughness: 0.5 }),
+        indicator: new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00aa33, emissiveIntensity: 0.8, metalness: 0.2, roughness: 0.3 })
+    };
+
+    // 地板与网格
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), mats.floor);
+    floor.rotation.x = -Math.PI/2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    scene.add(new THREE.GridHelper(40, 40, 0x444444, 0x222222));
+
+    // 场景标签（悬浮文字牌）
+    function makeLabel(text, x, y, z, w) {
+        const cvs = document.createElement('canvas'); const ctx = cvs.getContext('2d');
+        cvs.width = 256; cvs.height = 64;
+        ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, 0, 256, 64);
+        ctx.strokeStyle = 'rgba(80,200,255,0.8)'; ctx.lineWidth = 3; ctx.strokeRect(2, 2, 252, 60);
+        ctx.fillStyle = 'white'; ctx.font = 'bold 28px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(text, 128, 32);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cvs) }));
+        sp.position.set(x, y, z); sp.scale.set(w || 1.4, (w || 1.4) * 0.25, 1);
+        scene.add(sp);
+        return sp;
+    }
+
+    // =========================================
+    // 3. 码垛工位布局（1 个供箱托盘 + 2 个平行并排码垛托盘 / 三个码垛任务，互不干涉）
+    //    俯视图（x 向右，z 向前；AGV 取箱停泊于供箱托盘正前方，臂展半径约 2.9m）：
+    //      右前 (2.5, 0.4)   供箱托盘（2×2×2 预置 8 箱，按顺序先取上层后取下层）
+    //                        AGV 取箱停泊位 (2.5, -2.0)，距托盘南边缘 1.75m > 回转扫掠半径 1.42m
+    //      后排左 (-1.9, 4.3) 托盘A → 任务1 单层码垛（2×2 共4箱，AGV 停泊 (-1.9, 1.9)）
+    //      后排右 (0.2, 4.3)  托盘B → 任务2 底层码垛 + 任务3 顶层码垛（各2箱，AGV 停泊 (0.2, 1.9)）
+    //    托盘A 与托盘B 同朝向平行并排；AGV 全程走相互垂直的直线段：
+    //    南侧过道(z=-2.0) 沿 X 对齐 → 转向北直行到停泊位，任何姿态都不碰任何托盘。
+    // =========================================
+    const woodMat = new THREE.MeshStandardMaterial({ color: 0x9a7449, roughness: 0.9 });
+    const woodDark = new THREE.MeshStandardMaterial({ color: 0x7c5a36, roughness: 0.95 });
+
+    // 三个码垛任务定义：槽位 = 相对托盘中心偏移 [dx, 层高dy, dz]
+    // 托盘A 与 托盘B 同朝向平行并排于后排（z=4.3），两托盘边缘间距 0.6m
+    const TASKS = {
+        1: {
+            name: "单层码垛", palletName: "托盘A", total: 4,
+            pallet: new THREE.Vector3(-1.9, 0, 4.3),
+            slots: [[-0.25,0,0.25],[0.25,0,0.25],[-0.25,0,-0.25],[0.25,0,-0.25]]
+        },
+        2: {
+            name: "底层码垛", palletName: "托盘B", total: 2,
+            pallet: new THREE.Vector3(0.2, 0, 4.3),
+            slots: [[-0.25,0,0],[0.25,0,0]]
+        },
+        3: {
+            name: "顶层码垛", palletName: "托盘B", total: 2,
+            pallet: new THREE.Vector3(0.2, 0, 4.3),
+            slots: [[-0.25,0.34,0],[0.25,0.34,0]]
+        }
+    };
+
+    // AGV 停泊位（取箱 / 各托盘码放）：小车必须行驶一段距离往返
+    // 各停泊位与最近的托盘边界净距 ≥1.75m > 车身回转扫掠半径 1.42m（车身1.6×2.2m含保险杠对角线），
+    // 且全部位于 z=-2.0 南侧过道或 z=1.9 停泊行上，行驶路线为相互垂直的直线段
+    const PARK = {
+        pick: { x: 2.5, z: -2.0 },  // 供箱托盘取箱停泊位（AGV 初始位，正对供箱托盘）
+        1:    { x: -1.9, z: 1.9 },  // 托盘A 码放停泊位（先沿过道西行 4.4m 再北行 3.9m）
+        2:    { x: 0.2, z: 1.9 },   // 托盘B 码放停泊位（先沿过道西行 2.3m 再北行 3.9m）
+        3:    { x: 0.2, z: 1.9 }
+    };
+
+    // 木托盘（三纵梁 + 顶板条，1.5m × 1.3m，容纳箱间距0.5m 的码放槽位）
+    function createPallet(x, z, label) {
+        const g = new THREE.Group();
+        g.position.set(x, 0, z);
+        for (const dz of [-0.56, 0, 0.56]) {
+            const beam = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 0.18), woodDark);
+            beam.position.set(0, 0.045, dz); beam.castShadow = true; g.add(beam);
+        }
+        for (const dx of [-0.55, 0, 0.55]) {
+            const plank = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.04, 1.3), woodMat);
+            plank.position.set(dx, 0.11, 0); plank.castShadow = true; plank.receiveShadow = true; g.add(plank);
+        }
+        scene.add(g);
+        makeLabel(label, x, 1.1, z, 1.0);
+        return g;
+    }
+    createPallet(TASKS[1].pallet.x, TASKS[1].pallet.z, TASKS[1].palletName);
+    createPallet(TASKS[2].pallet.x, TASKS[2].pallet.z, TASKS[2].palletName);
+
+    // === 供箱托盘（右前侧，2×2×2 预置 8 只料箱，按顺序先取上层再取下层） ===
+    // 托盘南边缘距取箱停泊位 (2.5,-2.0) 1.75m > 回转扫掠半径 1.42m，AGV 原地回转不会碰到
+    const SUPPLY = { x: 2.5, z: 0.4, boxes: [] };   // 供箱托盘中心（AGV 停其正前方即可够到全部箱位）
+    // 取箱顺序槽位（相对托盘中心 [dx, 层高dy, dz]）：上层 4 箱 → 下层 4 箱
+    // 箱间距 0.62m：夹爪完全张开(±0.30)时手指外缘 0.3225 < 邻箱内面 0.41，互不碰撞
+    const SUPPLY_SLOTS = [
+        [-0.31, 0.34,  0.31], [0.31, 0.34,  0.31], [-0.31, 0.34, -0.31], [0.31, 0.34, -0.31],
+        [-0.31, 0,     0.31], [0.31, 0,     0.31], [-0.31, 0,    -0.31], [0.31, 0,    -0.31]
+    ];
+    createPallet(SUPPLY.x, SUPPLY.z, "供箱托盘");
+
+    // 供箱剩余数量 HUD 刷新
+    function updateSupplyHud() {
+        document.getElementById('supplyState').innerText = SUPPLY.boxes.length;
+    }
+
+    // 在供箱托盘上按槽位摆放 8 只料箱（每次场景复位时重建）
+    function buildSupplyBoxes() {
+        for (const s of SUPPLY_SLOTS) {
+            const box = createBoxMesh();
+            box.position.set(SUPPLY.x + s[0], PALLET_TOP + s[1] + BOX.h / 2, SUPPLY.z + s[2]);
+            scene.add(box);
+            SUPPLY.boxes.push(box);
+            palletState.placedBoxes.push(box);
+        }
+        updateSupplyHud();
+    }
+
+    // =========================================
+    // 3.5 料箱（瓦楞纸箱 Canvas 纹理 + 面单）
+    // =========================================
+    const BOX = { w: 0.42, h: 0.34, d: 0.42 };
+    const PALLET_TOP = 0.13;   // 托盘顶面高度
+
+    function createBoxTexture(boxId) {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 256;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#c89b6a'; ctx.fillRect(0, 0, 256, 256);
+        // 瓦楞纸纹路
+        for (let i = 0; i < 40; i++) {
+            ctx.strokeStyle = `rgba(120,80,40,${0.04 + Math.random() * 0.05})`;
+            const y = Math.random() * 256;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y); ctx.stroke();
+        }
+        // 封箱胶带（十字）
+        ctx.fillStyle = 'rgba(205,195,155,0.92)';
+        ctx.fillRect(118, 0, 20, 256);
+        ctx.fillRect(0, 118, 256, 20);
+        // 面单
+        ctx.fillStyle = '#f5f2e8'; ctx.fillRect(28, 56, 96, 64);
+        ctx.strokeStyle = '#8a8a8a'; ctx.lineWidth = 2; ctx.strokeRect(28, 56, 96, 64);
+        ctx.fillStyle = '#333'; ctx.font = 'bold 17px Arial'; ctx.textAlign = 'center';
+        ctx.fillText('龙江农机', 76, 82);
+        ctx.font = '12px monospace'; ctx.fillText(boxId, 76, 104);
+        return new THREE.CanvasTexture(c);
+    }
+
+    let boxSeq = 0;
+    function createBoxMesh() {
+        boxSeq++;
+        const tex = createBoxTexture('D3018-' + String(boxSeq).padStart(2, '0'));
+        const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.88, metalness: 0.02 });
+        const m = new THREE.Mesh(new THREE.BoxGeometry(BOX.w, BOX.h, BOX.d), mat);
+        m.castShadow = true; m.receiveShadow = true;
+        return m;
+    }
+
+    // =========================================
+    // 4. 机器人组装建模（工业精细版，关节层级与原版完全一致）
+    // =========================================
+    const robotModel = { group: new THREE.Group(), joints: [], gripper: {root:null} };
+    scene.add(robotModel.group);
+
+    // --- 辅助函数：螺栓 ---
+    function addBolt(parent, x, y, z, r, rotAxis) {
+        const bolt = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.035, 6), mats.brushedAlu);
+        if (rotAxis === 'x') bolt.rotation.z = Math.PI / 2;
+        else if (rotAxis === 'z') bolt.rotation.x = Math.PI / 2;
+        bolt.position.set(x, y, z);
+        bolt.castShadow = true;
+        parent.add(bolt);
+    }
+    function addBoltRing(parent, count, radius, y, r) {
+        for (let i = 0; i < count; i++) {
+            const ang = (i / count) * Math.PI * 2;
+            addBolt(parent, Math.cos(ang) * radius, y, Math.sin(ang) * radius, r, 'y');
+        }
+    }
+
+    // --- AGV 底盘 ---
+    const chassis = new THREE.Group();
+    robotModel.group.add(chassis);
+
+    const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 2.2), mats.armYellow);
+    bodyMesh.position.y = 0.5; bodyMesh.castShadow = true; bodyMesh.receiveShadow = true;
+    chassis.add(bodyMesh);
+
+    // 底裙边（深色）
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(1.66, 0.1, 2.26), mats.darkStruct);
+    skirt.position.y = 0.3; skirt.castShadow = true;
+    chassis.add(skirt);
+
+    // 顶盖面板
+    const topDeck = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.06, 2.1), mats.darkStruct);
+    topDeck.position.y = 0.74; topDeck.castShadow = true;
+    chassis.add(topDeck);
+
+    // 顶盖螺栓
+    addBolt(chassis, 0.62, 0.78, 0.95, 0.02, 'y'); addBolt(chassis, -0.62, 0.78, 0.95, 0.02, 'y');
+    addBolt(chassis, 0.62, 0.78, -0.95, 0.02, 'y'); addBolt(chassis, -0.62, 0.78, -0.95, 0.02, 'y');
+    addBolt(chassis, 0.62, 0.78, 0, 0.02, 'y'); addBolt(chassis, -0.62, 0.78, 0, 0.02, 'y');
+
+    // 侧面警示条纹
+    const stripeL = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 1.8), mats.hazard);
+    stripeL.position.set(0.81, 0.42, 0); chassis.add(stripeL);
+    const stripeR = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 1.8), mats.hazard);
+    stripeR.position.set(-0.81, 0.42, 0); chassis.add(stripeR);
+
+    // 前部方向指示灯（发光）
+    const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 16), mats.indicator);
+    indicator.position.set(0, 0.62, 1.12); chassis.add(indicator);
+
+    // 尾部控制盒（黑色工程塑料）
+    const ctrlBox = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.32), mats.blackPlastic);
+    ctrlBox.position.set(-0.42, 0.86, -0.7); ctrlBox.castShadow = true;
+    chassis.add(ctrlBox);
+    // 控制盒状态灯
+    const ctrlLed = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 8), mats.indicator);
+    ctrlLed.position.set(-0.42, 0.95, -0.55); chassis.add(ctrlLed);
+
+    // 前后保险杠
+    const bumperF = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 0.08), mats.darkStruct);
+    bumperF.position.set(0, 0.32, 1.14); bumperF.castShadow = true;
+    chassis.add(bumperF);
+    const bumperB = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 0.08), mats.darkStruct);
+    bumperB.position.set(0, 0.32, -1.14); bumperB.castShadow = true;
+    chassis.add(bumperB);
+
+    // --- 车轮（带胎纹、轮毂、螺帽） ---
+    function addWheel(x, z) {
+        const wg = new THREE.Group();
+        const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.26, 32), mats.tireRubber);
+        tire.rotation.z = Math.PI / 2; tire.castShadow = true; wg.add(tire);
+        // 胎纹块
+        for (let t = 0; t < 12; t++) {
+            const tread = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.05, 0.05), mats.tireRubber);
+            const ang = (t / 12) * Math.PI * 2;
+            tread.position.set(0, Math.cos(ang) * 0.34, Math.sin(ang) * 0.34);
+            tread.rotation.x = ang;
+            wg.add(tread);
+        }
+        // 轮毂
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.28, 24), mats.hubSilver);
+        hub.rotation.z = Math.PI / 2; hub.castShadow = true; wg.add(hub);
+        // 中心盖
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 16), mats.darkStruct);
+        cap.rotation.z = Math.PI / 2; wg.add(cap);
+        // 轮毂螺帽
+        for (let b = 0; b < 5; b++) {
+            const ba = (b / 5) * Math.PI * 2;
+            addBolt(wg, 0, Math.cos(ba) * 0.12, Math.sin(ba) * 0.12, 0.015, 'x');
+        }
+        wg.position.set(x, 0.35, z);
+        chassis.add(wg);
+    }
+    addWheel(0.9, 0.8); addWheel(-0.9, 0.8); addWheel(0.9, -0.8); addWheel(-0.9, -0.8);
+
+    // --- 机械臂底座（位置不可改动，运动控制依赖） ---
+    const armBase = new THREE.Group();
+    armBase.position.set(0, 0.75, 0.6);
+    chassis.add(armBase);
+
+    // 底座法兰盘
+    const basePlate = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.5, 0.07, 32), mats.darkStruct);
+    basePlate.position.y = 0.0; basePlate.castShadow = true; basePlate.receiveShadow = true;
+    armBase.add(basePlate);
+    addBoltRing(armBase, 8, 0.4, 0.02, 0.016);
+
+    // 底座旋转外壳（带散热筋）
+    const baseHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.4, 0.14, 32), mats.jointHousing);
+    baseHousing.position.y = 0.09; baseHousing.castShadow = true;
+    armBase.add(baseHousing);
+    for (let f = 0; f < 8; f++) {
+        const fa = (f / 8) * Math.PI * 2;
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.06), mats.jointHousing);
+        fin.position.set(Math.cos(fa) * 0.39, 0.09, Math.sin(fa) * 0.39);
+        fin.rotation.y = -fa;
+        armBase.add(fin);
+    }
+    // 旋转轴承环
+    const baseRing = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.02, 8, 32), mats.brushedAlu);
+    baseRing.rotation.x = Math.PI / 2; baseRing.position.y = 0.02;
+    armBase.add(baseRing);
+
+    // --- 精细臂段构建（保持关节层级不变） ---
+    function createDetailedLink(w, h, d, yOff, axis, isArm) {
+        const g = new THREE.Group();
+
+        // 主臂体
+        const mainMat = isArm ? mats.armYellow : mats.darkStruct;
+        const mainBody = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mainMat);
+        mainBody.position.y = yOff; mainBody.castShadow = true; mainBody.receiveShadow = true;
+        g.add(mainBody);
+
+        // 臂体两侧凹槽装饰（深色）
+        if (h > 0.5) {
+            const groove = new THREE.Mesh(new THREE.BoxGeometry(w + 0.012, h * 0.72, d * 0.18), mats.darkStruct);
+            groove.position.y = yOff;
+            g.add(groove);
+            // 凹槽两端堵头
+            const capT = new THREE.Mesh(new THREE.BoxGeometry(w + 0.014, 0.04, d * 0.2), mats.jointHousing);
+            capT.position.y = yOff + h * 0.36; g.add(capT);
+            const capB = new THREE.Mesh(new THREE.BoxGeometry(w + 0.014, 0.04, d * 0.2), mats.jointHousing);
+            capB.position.y = yOff - h * 0.36; g.add(capB);
+        }
+
+        // 关节壳体
+        const jointR = Math.max(w, d) * 0.68;
+        const jh = new THREE.Mesh(new THREE.CylinderGeometry(jointR, jointR, w * 1.35, 24), mats.jointHousing);
+        if (axis === 'x') jh.rotation.z = Math.PI / 2;
+        jh.castShadow = true;
+        g.add(jh);
+
+        // 轴承环（银色）
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(jointR * 0.88, 0.016, 8, 24), mats.brushedAlu);
+        if (axis === 'x') ring.rotation.y = Math.PI / 2;
+        else ring.rotation.x = Math.PI / 2;
+        g.add(ring);
+
+        // 关节端盖 + 中心螺栓
+        const capR = jointR * 0.55;
+        if (axis === 'x') {
+            const capA = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), mats.darkStruct);
+            capA.rotation.z = Math.PI / 2; capA.position.x = w * 0.68; g.add(capA);
+            addBolt(g, w * 0.7, 0, 0, 0.02, 'x');
+            const capB2 = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), mats.darkStruct);
+            capB2.rotation.z = Math.PI / 2; capB2.position.x = -w * 0.68; g.add(capB2);
+            addBolt(g, -w * 0.7, 0, 0, 0.02, 'x');
+        } else {
+            const capA = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), mats.darkStruct);
+            capA.position.y = 0.02; g.add(capA);
+            addBolt(g, 0, 0.04, 0, 0.02, 'y');
+        }
+        // 螺栓环
+        if (axis === 'x') {
+            for (let i = 0; i < 6; i++) {
+                const ba = (i / 6) * Math.PI * 2;
+                addBolt(g, w * 0.68, Math.cos(ba) * jointR * 0.72, Math.sin(ba) * jointR * 0.72, 0.012, 'x');
+            }
+        }
+        return { group: g, mesh: mainBody };
+    }
+
+    // J1 - 底座旋转 (Y轴)
+    const j1 = new THREE.Group(); armBase.add(j1);
+    const l1 = createDetailedLink(0.6, 0.3, 0.6, 0.15, 'y', true);
+    j1.add(l1.group); robotModel.joints.push({obj:j1, axis:'y'});
+
+    // J2 - 肩部 (X轴)
+    const j2 = new THREE.Group(); j2.position.y = 0.5; j1.add(j2);
+    const l2 = createDetailedLink(0.4, 1.4, 0.4, 0.7, 'x', true);
+    j2.add(l2.group); robotModel.joints.push({obj:j2, axis:'x'});
+    // 上臂线缆导管
+    const cable2 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.15, 8), mats.blackPlastic);
+    cable2.position.set(0.21, 0.7, 0); cable2.castShadow = true;
+    j2.add(cable2);
+    // 线缆卡扣
+    for (let k = 0; k < 3; k++) {
+        const clip = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 6, 12), mats.darkStruct);
+        clip.rotation.y = Math.PI / 2; clip.position.set(0.21, 0.25 + k * 0.45, 0);
+        j2.add(clip);
+    }
+
+    // J3 - 肘部 (X轴)
+    const j3 = new THREE.Group(); j3.position.y = 1.4; j2.add(j3);
+    const l3 = createDetailedLink(0.35, 1.2, 0.35, 0.6, 'x', true);
+    j3.add(l3.group); robotModel.joints.push({obj:j3, axis:'x'});
+    // 前臂线缆导管
+    const cable3 = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.95, 8), mats.blackPlastic);
+    cable3.position.set(0.185, 0.6, 0); cable3.castShadow = true;
+    j3.add(cable3);
+    for (let k = 0; k < 2; k++) {
+        const clip = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.007, 6, 12), mats.darkStruct);
+        clip.rotation.y = Math.PI / 2; clip.position.set(0.185, 0.25 + k * 0.45, 0);
+        j3.add(clip);
+    }
+
+    // J4 - 腕部旋转 (Y轴)
+    const j4 = new THREE.Group(); j4.position.y = 1.2; j3.add(j4);
+    const l4 = createDetailedLink(0.3, 0.3, 0.3, 0.15, 'y', false);
+    j4.add(l4.group); robotModel.joints.push({obj:j4, axis:'y'});
+
+    // J5 - 腕部俯仰 (X轴)
+    const j5 = new THREE.Group(); j5.position.y = 0.3; j4.add(j5);
+    const l5 = createDetailedLink(0.25, 0.4, 0.25, 0.2, 'x', true);
+    j5.add(l5.group); robotModel.joints.push({obj:j5, axis:'x'});
+
+    // J6 - 末端旋转 (Y轴)
+    const j6 = new THREE.Group(); j6.position.y = 0.4; j5.add(j6);
+    robotModel.joints.push({obj:j6, axis:'y'});
+    // J6 法兰盘
+    const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.06, 24), mats.brushedAlu);
+    flange.position.y = 0.03; flange.castShadow = true;
+    j6.add(flange);
+    addBoltRing(j6, 6, 0.1, 0.07, 0.009);
+
+    // --- 末端执行器：掌部(气缸+安装板) + 双指夹爪 ---
+    // 局部 +y 为离腕向下的延伸方向。箱体中心(TCP)在 y=0.42，箱体占 y∈[0.25,0.59]。
+    // 掌部全部位于箱顶(y=0.25)之上：法兰接头 0.06~0.14、气缸 0.065~0.215、安装板 0.18~0.22，
+    // 手指沿箱侧下探至 y=0.55，指垫夹持箱体中部 —— 全程不穿透箱体、不碰托盘顶面。
+    const gripRoot = new THREE.Group();
+    j6.add(gripRoot);
+    robotModel.gripper.root = gripRoot;
+
+    // 法兰接头（连接 J6 法兰与气缸体）
+    const gripAdapt = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.08, 20), mats.darkStruct);
+    gripAdapt.position.y = 0.10; gripAdapt.castShadow = true;
+    gripRoot.add(gripAdapt);
+
+    // 气动缸体（横置于安装板上方）
+    const gripCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.22, 24), mats.darkStruct);
+    gripCyl.rotation.x = Math.PI / 2; gripCyl.position.y = 0.14; gripCyl.castShadow = true;
+    gripRoot.add(gripCyl);
+    // 气管接头
+    const fitting = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.05, 8), mats.brushedAlu);
+    fitting.position.set(0.075, 0.19, 0.09); gripRoot.add(fitting);
+
+    // 夹爪安装板（箱顶上方 3cm，不与箱体接触）
+    const gripPlate = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.04, 0.14), mats.brushedAlu);
+    gripPlate.position.y = 0.20; gripPlate.castShadow = true;
+    gripRoot.add(gripPlate);
+
+    // 左手指（组，含指尖橡胶垫）
+    // 指体下端止于 TCP 下方 0.13m（夹取托盘底层箱时指尖 0.17 > 托盘顶面 0.13，不碰托盘）
+    const fingerL = new THREE.Group();
+    const fbodyL = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.33, 0.1), mats.brushedAlu);
+    fbodyL.position.y = 0.165; fbodyL.castShadow = true; fingerL.add(fbodyL);
+    const fpadL = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.24, 0.085), mats.gripperPad);
+    fpadL.position.set(0.024, 0.20, 0); fingerL.add(fpadL);
+    // 指根加固块（连接手指与安装板，位于箱顶之上）
+    const frootL = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.04, 0.12), mats.darkStruct);
+    frootL.position.y = 0.0; fingerL.add(frootL);
+    fingerL.position.set(-0.14, 0.22, 0);
+    gripRoot.add(fingerL);
+
+    // 右手指
+    const fingerR = new THREE.Group();
+    const fbodyR = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.33, 0.1), mats.brushedAlu);
+    fbodyR.position.y = 0.165; fbodyR.castShadow = true; fingerR.add(fbodyR);
+    const fpadR = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.24, 0.085), mats.gripperPad);
+    fpadR.position.set(-0.024, 0.20, 0); fingerR.add(fpadR);
+    const frootR = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.04, 0.12), mats.darkStruct);
+    frootR.position.y = 0.0; fingerR.add(frootR);
+    fingerR.position.set(0.14, 0.22, 0);
+    gripRoot.add(fingerR);
+
+    // --- 码垛 TCP 工具点（夹爪抓取中心 = 被夹料箱中心，料箱实时吸附于此） ---
+    // TCP 位于指垫夹持中心 y=0.42；箱体悬挂于掌板之下，掌部/手指均不穿入箱体
+    const toolTip = new THREE.Object3D();
+    toolTip.position.set(0, 0.42, 0);
+    gripRoot.add(toolTip);
+
+    // =========================================
+    // 5. 码垛运动系统（逆解 IK / 夹爪开合 / 抓持同步 / AGV 行驶）
+    // =========================================
+    const JOINTS = { 1: j1, 2: j2, 3: j3, 4: j4, 5: j5, 6: j6 };
+    const JAXIS = { 1: 'y', 2: 'x', 3: 'x', 4: 'y', 5: 'x', 6: 'y' };
+
+    // 连杆几何（与建模一致）：上臂 1.4 / 前臂(肘→腕) 1.5 / 腕→TCP 0.82
+    const SH = new THREE.Vector3(0, 1.25, 0.6);          // 肩部回转中心（机器人局部坐标）
+    const L1 = 1.4, L2 = 1.5, L3 = 0.82;
+
+    // 夹爪手指行程（指垫内面 = 手指组x ∓ 0.033；料箱半宽 0.21）
+    // 张开(宽) 0.30：指垫内面距箱面 5.7cm，下探包络不碰箱；
+    // 张开(窄) 0.265：松爪时手指外缘 0.2875 < 相邻箱内面 0.29，不碰邻箱；
+    // 闭合 0.243：指垫内面恰好贴合箱面 0.21，指体(内面0.2205)不穿透箱体。
+    const FINGER = { OPEN_WIDE: 0.30, OPEN_NARROW: 0.265, CLOSED: 0.243 };
+
+    // 搬运收拢姿态（肘部抬高、料箱保持在安全高度约 1.3m，AGV 行驶时使用）
+    const CARRY_POSE = { 1: 0, 2: -20, 3: 137, 5: 63 };
+
+    const palletState = {
+        carrying: null,               // 当前被夹持的料箱
+        counts: { 1: 0, 2: 0, 3: 0 }, // 各任务已码箱数
+        placedBoxes: []               // 场景中全部料箱（复位时清除）
+    };
+
+    const easeInOut = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+    // ---------- 逆解 IK：求各关节角使 TCP（箱中心）到达世界目标点，夹爪保持垂直向下 ----------
+    function computeIK(worldTarget) {
+        robotModel.group.updateWorldMatrix(true, false);
+        const local = robotModel.group.worldToLocal(worldTarget.clone());
+        const dx = local.x - SH.x, dz = local.z - SH.z;
+        const rho = Math.hypot(dx, dz);          // 肩部到目标的水平距离
+        const v = local.y - SH.y;                // 目标相对肩部的高度
+        const j1 = Math.atan2(dx, dz);           // 底座回转角
+
+        // 夹爪垂直向下 ⇒ 末段竖直向下：腕部目标点 = 箱中心上方 L3 处
+        const wx = rho, wy = v + L3;
+        let d = Math.hypot(wx, wy);
+        const dMin = Math.abs(L1 - L2) + 0.08, dMax = L1 + L2 - 0.03;
+        const ok = d >= dMin && d <= dMax;
+        d = THREE.Math.clamp(d, dMin, dMax);
+
+        const psi = Math.atan2(wx, wy);          // 肩→腕连线与竖直方向夹角
+        const cosDelta = THREE.Math.clamp((L1*L1 + d*d - L2*L2) / (2*L1*d), -1, 1);
+        const delta = Math.acos(cosDelta);       // 上臂与连线的夹角（肘部抬高解）
+        const th1 = psi - delta;                 // 上臂绝对角（自竖直向前进方向量）
+        const ex = L1 * Math.sin(th1), ey = L1 * Math.cos(th1);
+        const th2 = Math.atan2(wx - ex, wy - ey);// 前臂绝对角
+        return {
+            ok,
+            pose: {
+                1: THREE.Math.radToDeg(j1),
+                2: THREE.Math.radToDeg(th1),
+                3: THREE.Math.radToDeg(th2 - th1),
+                5: THREE.Math.radToDeg(Math.PI - th2)   // 末段保持竖直向下
+            }
+        };
+    }
+
+    // 多关节姿态平滑插值（未指定的关节保持不动）
+    async function setPose(pose, dur) {
+        checkStop();
+        const full = {};
+        for (const k of Object.keys(JOINTS)) {
+            full[k] = (pose[k] !== undefined) ? THREE.Math.degToRad(pose[k]) : JOINTS[k].rotation[JAXIS[k]];
+        }
+        const starts = {};
+        for (const k of Object.keys(full)) starts[k] = JOINTS[k].rotation[JAXIS[k]];
+        const steps = Math.max(6, Math.round(dur / 16));
+        for (let i = 1; i <= steps; i++) {
+            checkStop();
+            const e = easeInOut(i / steps);
+            for (const k of Object.keys(full)) JOINTS[k].rotation[JAXIS[k]] = starts[k] + (full[k] - starts[k]) * e;
+            await new Promise(r => setTimeout(r, 16));
+        }
+    }
+
+    // 机械臂 TCP 移动到世界目标点（IK 求角后插值，全程夹爪垂直向下）
+    async function moveToolTo(worldTarget, dur) {
+        checkStop();
+        const sol = computeIK(worldTarget);
+        if (!sol.ok) log("⚠️ 目标接近臂展极限，已就近伸展", "#e3b341");
+        await setPose(sol.pose, dur);
+    }
+
+    // ---------- 夹爪腕部对正：J6 回转使夹爪指面与箱面/托盘方向对齐 ----------
+    const _qTmp = new THREE.Quaternion();
+    const _xAxis = new THREE.Vector3();
+    function gripWorldYaw() {
+        gripRoot.getWorldQuaternion(_qTmp);
+        _xAxis.set(1, 0, 0).applyQuaternion(_qTmp);
+        _xAxis.y = 0;
+        if (_xAxis.lengthSq() < 1e-8) return 0;
+        _xAxis.normalize();
+        return Math.atan2(-_xAxis.z, _xAxis.x);
+    }
+    async function animateJoint(obj, axis, targetRad, dur) {
+        checkStop();
+        const start = obj.rotation[axis];
+        const steps = Math.max(4, Math.round(dur / 16));
+        for (let i = 1; i <= steps; i++) {
+            checkStop();
+            obj.rotation[axis] = start + (targetRad - start) * easeInOut(i / steps);
+            await new Promise(r => setTimeout(r, 16));
+        }
+    }
+    async function alignGripYaw(targetYawRad, dur) {
+        checkStop();
+        let err = gripWorldYaw() - targetYawRad;
+        err = Math.atan2(Math.sin(err), Math.cos(err));
+        if (Math.abs(err) < 0.005) return;
+        // 夹爪朝下时 J6 正向回转使世界偏航减小
+        await animateJoint(j6, 'y', j6.rotation.y + err, dur);
+    }
+
+    // 夹爪开合（targetX = 手指组到夹爪中轴的横向偏移，见 FINGER）
+    async function setGrip(targetX, dur) {
+        checkStop();
+        const sL = fingerL.position.x, sR = fingerR.position.x;
+        const steps = Math.max(4, Math.round(dur / 16));
+        for (let i = 1; i <= steps; i++) {
+            checkStop();
+            const t = easeInOut(i / steps);
+            fingerL.position.x = sL + (-targetX - sL) * t;
+            fingerR.position.x = sR + (targetX - sR) * t;
+            await new Promise(r => setTimeout(r, 16));
+        }
+        document.getElementById('gripState').innerText = (targetX <= FINGER.CLOSED + 0.001) ? "🟡 夹紧" : "🟢 张开";
+    }
+
+    // 抓持同步：每帧把被夹料箱中心吸附到 TCP，箱面随腕部回转贴合指垫
+    const _tipW = new THREE.Vector3();
+    function updateCarry() {
+        if (!palletState.carrying) return;
+        toolTip.getWorldPosition(_tipW);
+        palletState.carrying.position.copy(_tipW);
+        palletState.carrying.rotation.y = gripWorldYaw();
+    }
+
+    // HUD 码垛进度刷新
+    function updateHud() {
+        const el = document.getElementById('taskState');
+        el.innerText = `T1:${palletState.counts[1]}/${TASKS[1].total}  T2:${palletState.counts[2]}/${TASKS[2].total}  T3:${palletState.counts[3]}/${TASKS[3].total}`;
+    }
+
+    // =========================================
+    // 6. 场景复位
+    // =========================================
+    function setInitState() {
+        robotModel.group.position.set(PARK.pick.x, 0, PARK.pick.z);   // AGV 初始停在供箱托盘正前方
+        robotModel.group.rotation.set(0, 0, 0);
+
+        j1.rotation.y = 0; j2.rotation.x = THREE.Math.degToRad(30); j3.rotation.x = THREE.Math.degToRad(70);
+        j4.rotation.y = 0; j5.rotation.x = THREE.Math.degToRad(80); j6.rotation.y = 0;
+        fingerL.position.x = -FINGER.OPEN_WIDE; fingerR.position.x = FINGER.OPEN_WIDE;
+
+        // 清空全部料箱与码垛进度，供箱托盘按顺序重新摆放 8 箱
+        palletState.carrying = null;
+        palletState.counts = { 1: 0, 2: 0, 3: 0 };
+        palletState.placedBoxes.forEach(b => scene.remove(b));
+        palletState.placedBoxes = [];
+        SUPPLY.boxes = [];
+        boxSeq = 0;
+        buildSupplyBoxes();
+        updateHud();
+        document.getElementById('gripState').innerText = "🟢 张开";
+
+        isRunning = false; stopSignal = false;
+        stateDiv.innerText = "待机"; stateDiv.style.color = "white";
+    }
+    setInitState();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        updateCarry();      // 被夹持料箱实时跟随夹爪
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // =========================================
+    // 7. 底层运动控制器 (严格还原原生精准位置参数)
+    // =========================================
+    const cmd = {
+        wait: async (s) => {
+            checkStop();
+            const end = Date.now() + s*1000;
+            while(Date.now() < end) { checkStop(); await new Promise(r=>setTimeout(r, 50)); }
+        },
+        moveCarDist: async (dir, dist) => {
+            checkStop();
+            const step = 0.05; 
+            let moved = 0;
+            const sign = (dir==='FWD') ? 1 : -1;
+            while(moved < dist - 0.001) {
+                checkStop();
+                let moveAmount = Math.min(step, dist - moved);
+                robotModel.group.translateZ(sign * moveAmount);
+                moved += moveAmount;
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        rotateCar: async (dir, deg) => {
+            checkStop();
+            const rad = THREE.Math.degToRad(deg);
+            const step = 0.04; let moved = 0;
+            const sign = (dir==='LEFT') ? 1 : -1;
+            while(moved < rad - 0.001) {
+                checkStop();
+                const d = Math.min(step, rad - moved);
+                robotModel.group.rotation.y += sign * d;
+                moved += d;
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        moveArm: async (id, deg) => {
+            checkStop();
+            const j = robotModel.joints[id];
+            const target = THREE.Math.degToRad(deg);
+            const start = j.obj.rotation[j.axis];
+            const diff = target - start;
+            const steps = 40;
+            for(let i=1; i<=steps; i++) {
+                checkStop();
+                j.obj.rotation[j.axis] = start + diff * (i/steps);
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        // AGV 原地回转（弧度，载货时使用）
+        turnBy: async (rad) => {
+            checkStop();
+            const step = 0.022; let moved = 0;
+            while (moved < Math.abs(rad) - 0.001) {
+                checkStop();
+                const d = Math.min(step, Math.abs(rad) - moved) * Math.sign(rad);
+                robotModel.group.rotation.y += d;
+                moved += Math.abs(d);
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        // AGV 直行（米）
+        driveBy: async (dist) => {
+            checkStop();
+            const step = 0.05; let moved = 0;
+            while (moved < dist - 0.001) {
+                checkStop();
+                const d = Math.min(step, dist - moved);
+                robotModel.group.translateZ(d);
+                moved += d;
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        // AGV 直线行驶到停泊位：全部走相互垂直的直线段，不斜穿场地
+        //   路线：先回到南侧运输过道(z=-2.0) → 沿过道对齐目标 X → 转向北直行抵达停泊位 → 回正朝向(+Z 朝托盘)
+        driveTo: async (x, z, headingDeg) => {
+            checkStop();
+            const gp = robotModel.group;
+            const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+            const LANE = PARK.pick.z;   // 南侧运输过道（供箱托盘取箱位所在行）
+            if (Math.hypot(x - gp.position.x, z - gp.position.z) > 0.05) {
+                const pts = [];
+                if (Math.abs(gp.position.z - LANE) > 0.02) pts.push([gp.position.x, LANE]);
+                if (Math.abs(gp.position.x - x) > 0.02)    pts.push([x, LANE]);
+                if (Math.abs(z - LANE) > 0.02)             pts.push([x, z]);
+                for (const [tx, tz] of pts) {
+                    const dx = tx - gp.position.x, dz = tz - gp.position.z;
+                    const dist = Math.hypot(dx, dz);
+                    if (dist < 0.02) continue;
+                    const want = Math.atan2(dx, dz);                 // 转向直线路段方向
+                    const turn = wrap(want - gp.rotation.y);
+                    if (Math.abs(turn) > 0.01) await cmd.turnBy(turn);
+                    await cmd.driveBy(dist);                          // 直线行驶该路段
+                }
+            }
+            const final = wrap(THREE.Math.degToRad(headingDeg || 0) - gp.rotation.y);
+            if (Math.abs(final) > 0.01) await cmd.turnBy(final);
+        },
+    };
+
+    // ---------- 面向 Python 的底层运动原语（左侧程序逐步驱动机器人） ----------
+
+    // 供箱查询：按顺序返回下一只待取料箱的信息（供箱托盘已空时返回 null）
+    function nextBoxJson() {
+        const b = SUPPLY.boxes[0];
+        if (!b) return null;
+        return JSON.stringify({
+            index: SUPPLY_SLOTS.length - SUPPLY.boxes.length + 1,   // 第几只（按取用顺序）
+            pos: [b.position.x, b.position.y, b.position.z],        // 箱中心世界坐标
+            remaining: SUPPLY.boxes.length - 1                      // 取走后托盘剩余箱数
+        });
+    }
+
+    // 夹爪动作 + 抓放联动：
+    //   close —— 指垫贴合箱面夹紧，若 TCP 正对供箱托盘上的某只料箱则将其吸附于夹爪
+    //   narrow —— 微张松爪，被夹料箱原地释放（不飘移），并核对是否落在槽位上
+    //   wide —— 完全张开（取箱前预备）
+    async function gripperAction(state) {
+        checkStop();
+        if (state === 'wide') {
+            await setGrip(FINGER.OPEN_WIDE, 320);
+            return;
+        }
+        if (state === 'close') {
+            await setGrip(FINGER.CLOSED, 320);
+            // 在供箱托盘剩余料箱中寻找 TCP 正对的那只（按顺序夹取）
+            toolTip.getWorldPosition(_tipW);
+            let best = null, bestD = 0.10;
+            for (const b of SUPPLY.boxes) {
+                const d = b.position.distanceTo(_tipW);
+                if (d < bestD) { best = b; bestD = d; }
+            }
+            if (best) {
+                palletState.carrying = best;
+                SUPPLY.boxes.splice(SUPPLY.boxes.indexOf(best), 1);
+                updateSupplyHud();
+                log("🤏 夹爪闭合，料箱已被夹牢（指垫贴合箱面，不穿透）", '#9fb6ca');
+            } else {
+                log("⚠️ 夹爪位置与料箱不符，未能夹取（检查程序坐标）", "#e3b341");
+            }
+            return;
+        }
+        if (state === 'narrow') {
+            await setGrip(FINGER.OPEN_NARROW, 320);
+            if (palletState.carrying) {
+                const box = palletState.carrying;
+                palletState.carrying = null;
+                box.rotation.y = gripWorldYaw();
+                confirmSlot(box.position);
+            }
+            return;
+        }
+        throw new Error("夹爪指令无效（可用: wide / close / narrow）");
+    }
+
+    // 释放核对：料箱若恰好落在某任务的下一个槽位上，则累加码垛进度
+    function confirmSlot(pos) {
+        for (const id of [1, 2, 3]) {
+            const T = TASKS[id];
+            const i = palletState.counts[id];
+            if (i >= T.slots.length) continue;
+            const s = T.slots[i];
+            const tx = T.pallet.x + s[0], ty = PALLET_TOP + s[1] + BOX.h / 2, tz = T.pallet.z + s[2];
+            if (Math.abs(pos.x - tx) < 0.06 && Math.abs(pos.y - ty) < 0.06 && Math.abs(pos.z - tz) < 0.06) {
+                palletState.counts[id]++;
+                updateHud();
+                log(`📦 ${T.palletName}（${T.name}）已码放 ${palletState.counts[id]}/${T.total} 箱`, '#7ee08a');
+                return;
+            }
+        }
+        log("⚠️ 料箱未对准任何槽位（检查程序中的放置坐标）", "#e3b341");
+    }
+
+    // 任务配置查询：返回 JSON 供 Python 解析（Python 端据此计算运动目标）
+    function taskJson(no) {
+        const T = TASKS[no];
+        if (!T) return JSON.stringify({ error: "无效任务编号: " + no });
+        return JSON.stringify({
+            name: T.name, palletName: T.palletName, total: T.total,
+            pallet: [T.pallet.x, T.pallet.z],
+            park: [PARK[no].x, PARK[no].z],
+            next: palletState.counts[no],
+            slots: T.slots.map(s => [s[0], s[1], s[2]])
+        });
+    }
+    function setupJson() {
+        return JSON.stringify({
+            boxH: BOX.h,                                  // 箱高
+            palletTop: PALLET_TOP,                        // 托盘顶面高度
+            parkPick: [PARK.pick.x, PARK.pick.z],         // 供箱托盘取箱停泊位
+            supplyTotal: SUPPLY_SLOTS.length,             // 供箱托盘预置料箱总数
+            tasks: [1, 2, 3].map(no => JSON.parse(taskJson(no)))
+        });
+    }
+
+    // 暴露给 Python 引擎的全局接口（robot.* 每一条指令对应一段真实运动）
+    window.py_move_car = async function(dir, dist) { await cmd.moveCarDist(dir, dist); };
+    window.py_rotate_car = async function(dir, angle) { await cmd.rotateCar(dir, angle); };
+    window.py_move_arm = async function(id, angle) { await cmd.moveArm(id, angle); };
+    window.py_drive_to = async function(x, z) { await cmd.driveTo(x, z, 0); };
+    window.py_next_box = function() { return nextBoxJson(); };
+    window.py_arm_to = async function(x, y, z, dur) { await moveToolTo(new THREE.Vector3(x, y, z), dur || 700); };
+    window.py_align_grip = async function() { await alignGripYaw(0, 350); };
+    window.py_gripper = async function(state) { await gripperAction(state); };
+    window.py_carry = async function() { await setPose(CARRY_POSE, 600); };
+    window.py_wait = async function(s) { await cmd.wait(s); };
+    window.py_setup = function() { return setupJson(); };
+    window.py_task = function(no) { return taskJson(no); };
+    window.py_log = function(msg) { log(msg, '#4fc1ff'); };
+
+    // =========================================
+    // 8. Pyodide 环境初始化
+    // =========================================
+    let pyodide;
+    async function initPython() {
+        try {
+            if (typeof loadPyodide === 'undefined') throw new Error("外部 Python 引擎未加载。");
+            while (!window.pyodide) await new Promise(r=>setTimeout(r,50));
+                pyodide = window.pyodide;
+
+            // 桥接 Python async 调用：robot 的每个方法都对应一段真实机器人运动
+            await pyodide.runPythonAsync(`
+                import js
+                class RobotController:
+                    async def move_car(self, direction, distance):
+                        await js.py_move_car(direction, distance)
+                    async def rotate_car(self, direction, angle):
+                        await js.py_rotate_car(direction, angle)
+                    async def move_arm(self, joint_id, angle):
+                        await js.py_move_arm(joint_id, angle)
+                    async def drive_to(self, x, z):
+                        await js.py_drive_to(x, z)
+                    def next_box(self):
+                        return js.py_next_box()
+                    async def arm_to(self, x, y, z, dur=700):
+                        await js.py_arm_to(x, y, z, dur)
+                    async def align_grip(self):
+                        await js.py_align_grip()
+                    async def gripper(self, state):
+                        await js.py_gripper(state)
+                    async def carry_pose(self):
+                        await js.py_carry()
+                    async def wait(self, seconds):
+                        await js.py_wait(seconds)
+                    def task(self, task_no):
+                        return js.py_task(task_no)
+                    def setup(self):
+                        return js.py_setup()
+                    def log(self, msg):
+                        js.py_log(msg)
+
+                robot = RobotController()
+            `);
+
+            document.getElementById('env-status').innerText = "✔️ 环境就绪";
+            document.getElementById('env-status').style.color = "#4caf50";
+            document.getElementById('py-code').disabled = false;
+        } catch (err) {
+            console.error("Python 初始化失败: " + err);
+        }
+    }
+
+    // =========================================
+    // 9. UI 控制按钮逻辑
+    // =========================================
+    window.runProgram = async function() {
+        if(isRunning) return;
+        const code = document.getElementById('py-code').value;
+        if(!code.trim()) return;
+
+        // 每次运行前自动复位场景：保证左侧程序的任何修改都能立即体现在机器人运动上
+        setInitState();
+
+        logDiv.innerHTML = "";
+        isRunning = true;
+        stopSignal = false;
+        stateDiv.innerText = "运行中...";
+        stateDiv.style.color = "#00ff00";
+
+        try {
+            pyodide.setStdout({ batched: (str) => log(str, '#ccc') });
+            await pyodide.runPythonAsync(code);
+            log("🏁 脚本执行完毕", "#0f0");
+        } catch (e) {
+            log("🛑 执行终止或发生报错: " + e.message, "#ff4444");
+        } finally {
+            isRunning = false;
+            palletState.carrying = null;
+            stateDiv.innerText = "待机";
+            stateDiv.style.color = "white";
+        }
+    };
+
+    window.stopProgram = function() {
+        if(isRunning) {
+            stopSignal = true; 
+            log(">> 触发强制停止...", "#ff4444");
+        }
+    };
+
+    window.resetScene = function() {
+        if(isRunning) stopProgram();
+        setTimeout(setInitState, 150); 
+        logDiv.innerHTML = "<div style='color:#ccc'>系统已复位。</div>";
+    };
+
+    setTimeout(initPython, 500);
+
+    window.addEventListener('resize', () => {
+        const d = document.getElementById('simDiv');
+        camera.aspect = d.clientWidth / d.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(d.clientWidth, d.clientHeight);
+    });
+    setTimeout(()=>window.dispatchEvent(new Event('resize')), 200);
+
+</script>
+</body>
+</html>

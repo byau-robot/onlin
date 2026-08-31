@@ -1,0 +1,1510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python 编程练习 - 机器人技术项目制教学仿真平台</title>
+
+    <!-- 引入 Pyodide 运行环境 -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; }
+
+        body {
+            height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+            background: #f2f6fb; color: #1f2b3a;
+        }
+
+        /* ===== 顶部栏 ===== */
+        #header {
+            height: 54px; flex: none; display: flex; align-items: center; justify-content: space-between;
+            padding: 0 18px; background: linear-gradient(90deg, #ffffff 0%, #f4f8fd 60%, #ffffff 100%);
+            border-bottom: 1px solid #dde6f0; box-shadow: 0 2px 10px rgba(30,60,110,0.06); z-index: 50;
+        }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand .logo {
+            width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center;
+            background: linear-gradient(135deg, #2563eb, #06b6d4); box-shadow: 0 2px 10px rgba(37,99,235,0.28);
+        }
+        .brand .logo svg { width: 19px; height: 19px; stroke: #fff; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .brand h1 { font-size: 17px; color: #17233a; letter-spacing: 1px; font-weight: 600; }
+        .brand .sub { font-size: 11px; color: #8496ad; letter-spacing: 2px; margin-top: 2px; }
+        #env-status { font-size: 12px; color: #b45309; }
+        #env-status.ok { color: #15803d; }
+        .home-link {
+            color: #2563eb; text-decoration: none; font-size: 12.5px; padding: 6px 12px;
+            border: 1px solid #c9d8ec; border-radius: 6px; transition: .2s; margin-left: 14px; background: #fff;
+        }
+        .home-link:hover { border-color: #2563eb; color: #1d4ed8; background: #eef4fd; }
+
+        /* ===== 主体 ===== */
+        #main { display: flex; flex: 1; min-height: 0; }
+
+        /* 左侧导航（宽度为原来的三分之二） */
+        #sidebar {
+            width: 212px; flex: none; background: #ffffff; border-right: 1px solid #e3eaf3;
+            overflow-y: auto; padding: 10px 0 30px;
+        }
+        #sidebar::-webkit-scrollbar { width: 8px; }
+        #sidebar::-webkit-scrollbar-thumb { background: #d4dce8; border-radius: 4px; }
+
+        .side-title {
+            font-size: 11px; color: #8496ad; letter-spacing: 3px; padding: 10px 18px 8px;
+            text-transform: uppercase;
+        }
+
+        .module { margin: 0 10px 8px; border: 1px solid #e3eaf3; border-radius: 10px; overflow: hidden; background: #fbfdff; }
+        .module-head {
+            display: flex; align-items: center; gap: 10px; padding: 11px 13px; cursor: pointer;
+            background: linear-gradient(90deg, #f4f8fd, #fbfdff); transition: .2s; user-select: none;
+        }
+        .module-head:hover { background: #eef4fb; }
+        .module-head .m-icon {
+            width: 30px; height: 30px; border-radius: 8px; flex: none;
+            display: flex; align-items: center; justify-content: center;
+            background: #e8f0fc; border: 1px solid #cdddf3;
+        }
+        .module-head .m-icon svg { width: 16px; height: 16px; stroke: #2563eb; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+        .module-head .m-name { font-size: 13.5px; font-weight: 600; color: #24324a; flex: 1; letter-spacing: .5px; }
+        .module-head .m-count {
+            font-size: 10.5px; color: #2563eb; background: #e8f0fc;
+            padding: 2px 8px; border-radius: 10px; font-family: Consolas, monospace;
+        }
+        .module-head .arrow { color: #93a3b8; font-size: 10px; transition: .25s; }
+        .module.open .arrow { transform: rotate(90deg); }
+
+        .module-body { display: none; padding: 4px 6px 8px; }
+        .module.open .module-body { display: block; }
+
+        .prog-item {
+            display: flex; align-items: center; gap: 6px; padding: 7px 8px; margin: 2px 0;
+            border-radius: 7px; cursor: pointer; transition: .15s; border: 1px solid transparent;
+        }
+        .prog-item:hover { background: #eef4fb; }
+        .prog-item.active {
+            background: linear-gradient(90deg, #ddeafd, #f0f6ff);
+            border-color: #a8c8f5;
+        }
+        .prog-item .p-no {
+            font-family: Consolas, monospace; font-size: 10.5px; color: #7f93ab; flex: none;
+            width: 26px; text-align: center;
+        }
+        .prog-item.active .p-no { color: #2563eb; }
+        .prog-item .p-name { font-size: 11.5px; color: #43536b; flex: 1; line-height: 1.45; }
+        .prog-item.active .p-name { color: #17233a; font-weight: 600; }
+        .prog-item .p-done { font-size: 11px; color: #15803d; display: none; }
+        .prog-item.done .p-done { display: inline; }
+
+        /* 右侧内容区 */
+        #content { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 14px 16px 14px; }
+
+        #prog-header {
+            flex: none; display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; border: 1px solid #e3eaf3; border-radius: 10px;
+            background: linear-gradient(90deg, #ffffff, #f6faff); margin-bottom: 10px;
+            box-shadow: 0 1px 4px rgba(30,60,110,0.04);
+        }
+        #prog-title { font-size: 15px; font-weight: 600; color: #17233a; letter-spacing: .5px; }
+        #prog-points { display: flex; gap: 6px; margin-top: 7px; flex-wrap: wrap; }
+        .chip {
+            font-size: 11px; color: #0f766e; background: #e6f7f4;
+            border: 1px solid #b8e5de; padding: 2px 9px; border-radius: 10px;
+            font-family: Consolas, monospace;
+        }
+
+        /* 双栏练习区：左=样例只读 / 右=手动练习 */
+        #work-area { flex: 1; min-height: 0; display: flex; gap: 12px; }
+        .panel {
+            flex: 1; min-width: 0; display: flex; flex-direction: column;
+            border: 1px solid #e3eaf3; border-radius: 10px; background: #ffffff;
+            box-shadow: 0 1px 4px rgba(30,60,110,0.04); overflow: hidden;
+        }
+        .panel-title {
+            flex: none; font-size: 12.5px; font-weight: 600; color: #24324a;
+            padding: 9px 14px; background: linear-gradient(90deg, #f4f8fd, #fbfdff);
+            border-bottom: 1px solid #e3eaf3; letter-spacing: .5px;
+        }
+        .panel-title .hint { font-weight: 400; color: #8496ad; font-size: 10.5px; margin-left: 8px; letter-spacing: 0; }
+        /* 深色代码编辑区（textarea 透明文字 + 底层 <pre> 高亮覆盖） */
+        .code, .editor { min-width: 0; max-width: 100%; }
+        /* 与 weed_train.html 严格一致：黑色背景、Consolas、不同颜色高亮 */
+        .code {
+            background: #0f172a; color: #e2e8f0; font-family: "Consolas", "Courier New", monospace;
+            font-size: 12.5px; line-height: 1.7; padding: 12px 14px; overflow: auto;
+            white-space: pre; flex: 1 1 auto; min-height: 0; margin: 0;
+        }
+        .code .kw  { color: #f472b6; }
+        .code .str { color: #86efac; }
+        .code .num { color: #fbbf24; }
+        .code .com { color: #94a3b8; font-style: italic; }
+        .code .cls { color: #f59e0b; }
+        .code .fn  { color: #60a5fa; }
+        .code .ln  { display: inline-block; width: 30px; color: #475569; user-select: none; text-align: right; padding-right: 10px; }
+
+        .editor {
+            background: #0f172a; color: #e2e8f0; font-family: "Consolas", "Courier New", monospace;
+            font-size: 12.5px; line-height: 1.7; padding: 12px 14px; overflow: auto;
+            white-space: pre; flex: 1 1 auto; min-height: 0;
+            border: none; outline: none; resize: none; width: 100%; display: block; caret-color: #22c55e;
+        }
+        .editor::selection { background: rgba(34,197,94,0.35); }
+        .panel textarea::placeholder { color: #64748b; -webkit-text-fill-color: #64748b; opacity: .8; }
+        .panel textarea:focus { box-shadow: inset 0 0 0 2px rgba(34,197,94,0.25); }
+        #sample-code { user-select: none; -webkit-user-select: none; caret-color: transparent; }
+
+        /* 面板工具栏 */
+        .panel-toolbar {
+            flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+            border-top: 1px solid #e3eaf3; background: #f8fafd;
+        }
+        .panel-toolbar button {
+            padding: 7px 16px; border: none; border-radius: 7px; cursor: pointer;
+            font-size: 12.5px; font-weight: 600; transition: .2s; display: inline-flex; align-items: center; gap: 6px;
+            letter-spacing: .5px;
+        }
+        .btn-run { background: linear-gradient(135deg, #16a34a, #15803d); color: #fff; box-shadow: 0 3px 10px rgba(22,163,74,0.22); }
+        .btn-run:hover { background: linear-gradient(135deg, #18b552, #17933f); transform: translateY(-1px); }
+        .btn-run:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+        .btn-ghost {
+            background: #ffffff; color: #43536b; border: 1px solid #cfdbe9 !important; font-weight: 500;
+        }
+        .btn-ghost:hover { color: #1d4ed8; border-color: #93b8ec !important; background: #f2f7fe; }
+        .run-state { font-size: 11.5px; color: #15803d; margin-left: auto; font-family: Consolas, monospace; }
+
+        /* 面板控制台 */
+        .mini-console {
+            flex: none; height: 148px; overflow-y: auto; background: #f8fafd;
+            border-top: 1px solid #dbe4ef; padding: 8px 12px;
+            font-family: Consolas, "Courier New", monospace; font-size: 12px;
+            color: #33445c; line-height: 1.65; user-select: none; -webkit-user-select: none;
+        }
+        .mini-console::-webkit-scrollbar { width: 8px; }
+        .mini-console::-webkit-scrollbar-thumb { background: #d4dce8; border-radius: 4px; }
+        .mini-console .c-in { color: #2563eb; }
+        .mini-console .c-ok { color: #15803d; }
+        .mini-console .c-err { color: #dc2626; }
+        .mini-console .c-warn { color: #b45309; }
+
+        /* 全页禁止选取（配合 JS 禁止复制/剪切/粘贴） */
+        body { user-select: none; -webkit-user-select: none; }
+
+        /* 环境加载遮罩 */
+        #loading-mask {
+            position: fixed; inset: 0; background: rgba(242,246,251,0.94); z-index: 999;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+        }
+        #loading-mask .ring {
+            width: 46px; height: 46px; border-radius: 50%;
+            border: 3px solid #d5e3f6; border-top-color: #2563eb;
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #loading-mask .txt { color: #5b6d85; font-size: 14px; letter-spacing: 2px; }
+    </style>
+</head>
+<body>
+
+    <!-- 加载遮罩 -->
+    <div id="loading-mask">
+        <div class="ring"></div>
+        <div class="txt">正在启动 Python 运行环境（Pyodide）...</div>
+    </div>
+
+    <!-- ===== 顶部栏 ===== -->
+    <div id="header">
+        <div class="brand">
+            <div class="logo">
+                <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            </div>
+            <div>
+                <h1>Python 编程练习</h1>
+                <div class="sub">六大基础语法模块 · 30 个实训程序 · 浏览器端真实运行</div>
+            </div>
+        </div>
+        <div style="display:flex;align-items:center;">
+            <span id="env-status">⚙️ 环境加载中...</span>
+            <a class="home-link" href="/">← 返回平台主页</a>
+        </div>
+    </div>
+
+    <div id="main">
+        <!-- ===== 左侧导航（JS 渲染） ===== -->
+        <aside id="sidebar">
+            <div class="side-title">COURSE MODULES / 课程模块</div>
+            <div id="nav-container"></div>
+        </aside>
+
+        <!-- ===== 右侧内容区（左：样例只读 / 右：手动练习） ===== -->
+        <section id="content">
+            <div id="prog-header">
+                <div>
+                    <div id="prog-title">正在加载课程数据...</div>
+                    <div id="prog-points"></div>
+                </div>
+            </div>
+
+            <div id="work-area">
+                <!-- 左：样例程序（只读参考） -->
+                <div class="panel" id="panel-sample">
+                    <div class="panel-title">📖 样例程序<span class="hint">只读参考 · 不可复制</span></div>
+                    <pre class="code" id="sample-code"></pre>
+                    <div class="panel-toolbar">
+                        <button class="btn-run" id="btn-run-sample" onclick="runSample()" disabled>▶ 运行样例</button>
+                        <span class="run-state" id="run-state-sample"></span>
+                    </div>
+                    <div class="mini-console" id="console-sample"></div>
+                </div>
+
+                <!-- 右：我的练习（手动输入代码） -->
+                <div class="panel" id="panel-practice">
+                    <div class="panel-title">✍️ 我的练习<span class="hint">请手动输入代码 · 禁止粘贴</span></div>
+                    <textarea class="editor" id="py-code" spellcheck="false" disabled placeholder="请在此手动输入 Python 代码..."></textarea>
+                    <div class="panel-toolbar">
+                        <button class="btn-run" id="btn-run" onclick="runCode()" disabled>▶ 运行程序</button>
+                        <button class="btn-ghost" onclick="clearPractice()">🧹 清空</button>
+                        <button class="btn-ghost" onclick="showFiles()">📂 查看虚拟文件</button>
+                        <span class="run-state" id="run-state"></span>
+                    </div>
+                    <div class="mini-console" id="console"></div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+<!-- ============================================================
+     以下为 30 个实训程序源码（原文嵌入，加载后可编辑运行）
+     ============================================================ -->
+
+<!-- 模块一：Python变量与数据类型 -->
+<script type="text/x-python" id="p-1-1">
+# 程序1：基本数据类型的定义与输出
+# 定义整数（int）变量，变量名"zhengshu"对应"整数"
+zhengshu = 100  # 整数类型，可表示正整数、负整数和零
+
+# 定义浮点数（float /fləʊt/）变量，变量名"fudian"对应"浮点"
+fudian = 3.14159  # 浮点数类型，用于表示带小数点的数字
+
+# 定义字符串（str）变量，变量名"zifuchuan"对应"字符串"
+zifuchuan = "Hello, 世界"  # 字符串类型，用单引号或双引号包裹的文本，可包含中文
+
+# 定义布尔值（bool）变量，变量名"bul"对应"布尔"
+bul_true = True   # 布尔值True，表示"真"
+bul_false = False # 布尔值False /fɔːls/，表示"假"
+a = 5
+b = 10
+print(a > 3 and b < 20)  # True（两个条件都成立）
+print(not a == b)        # True（a 不等于 b，反转后为真）
+
+# 定义空值（None）变量，变量名"kong"对应"空"
+kong = None  # 空值类型，表示不存在的值，与0、空字符串不同
+
+# 输出各变量的值和类型，type()函数用于获取变量的数据类型
+print("整数变量的值：", zhengshu, "，类型：", type(zhengshu))
+print("浮点数变量的值：", fudian, "，类型：", type(fudian))
+print("字符串变量的值：", zifuchuan, "，类型：", type(zifuchuan))
+print("布尔值True的值：", bul_true, "，类型：", type(bul_true))
+print("布尔值False的值：", bul_false, "，类型：", type(bul_false))
+print("空值变量的值：", kong, "，类型：", type(kong))
+</script>
+
+<script type="text/x-python" id="p-1-2">
+# 程序2：数据类型转换示例
+# 定义字符串类型的数字，变量名"str_shuzi"对应"字符串数字"
+str_shuzi = "123"  # 虽然内容是数字，但用引号包裹，所以是字符串类型
+print("原始字符串数字：", str_shuzi, "，类型：", type(str_shuzi))
+
+# 将字符串转换为整数，变量名"zhuan_int"对应"转整数"
+zhuan_int = int(str_shuzi)  # int()函数：将符合条件的字符串/浮点数转为整数
+print("转换为整数后：", zhuan_int, "，类型：", type(zhuan_int))
+
+# 定义整数变量，变量名"int_shu"对应"整数数字"
+int_shu = 456
+print("原始整数：", int_shu, "，类型：", type(int_shu))
+
+# 将整数转换为字符串，变量名"zhuan_str"对应"转字符串"
+zhuan_str = str(int_shu)  # str()函数：将任意类型转为字符串
+print("转换为字符串后：", zhuan_str, "，类型：", type(zhuan_str))
+
+# 定义浮点数变量，变量名"float_shu"对应"浮点数字"
+float_shu = 78.9
+print("原始浮点数：", float_shu, "，类型：", type(float_shu))
+
+# 将浮点数转换为整数（会丢失小数部分），变量名"float_zhuan_int"对应"浮点转整数"
+float_zhuan_int = int(float_shu)
+print("浮点数转整数后：", float_zhuan_int, "，类型：", type(float_zhuan_int))
+
+# 将整数转换为浮点数，变量名"int_zhuan_float"对应"整数转浮点"
+int_zhuan_float = float(int_shu)  # float()函数：将整数/字符串转为浮点数
+print("整数转浮点数后：", int_zhuan_float, "，类型：", type(int_zhuan_float))
+</script>
+
+<script type="text/x-python" id="p-1-3">
+# 程序3：字符串的基本操作
+# 定义姓和名字符串，变量名"xing"对应"姓"，"ming"对应"名"
+xing = "张"    # 字符串：单个汉字
+ming = "三"    # 字符串：单个汉字
+
+# 字符串拼接（用+号），变量名"quanming"对应"全名"
+quanming = xing + ming  # 字符串拼接：将两个字符串合并为一个
+print("拼接后的全名：", quanming, "，类型：", type(quanming))
+
+# 字符串重复（用*号），变量名"chongfu"对应"重复"
+chongfu = "ab" * 3  # 字符串重复：将字符串"ab"重复3次，结果为"ababab"
+print("重复后的字符串：", chongfu)
+
+# 定义长字符串，变量名"chang_str"对应"长字符串"
+chang_str = "Python是一门编程语言"
+# 获取字符串长度，len()函数用于计算字符串包含的字符数
+print("长字符串的长度：", len(chang_str))  # 结果为13（每个汉字/字母都算1个字符）
+
+# 字符串索引（获取单个字符），变量名"suo yin"对应"索引"
+suo_yin = chang_str[0]  # 索引从0开始，0表示第一个字符
+print("长字符串的第一个字符：", suo_yin)  # 结果为"P"
+</script>
+
+<script type="text/x-python" id="p-1-4">
+# 程序4：布尔值的逻辑运算
+# 定义两个布尔变量，变量名"a"和"b"为简写（布尔值常用单字母）
+a = True   # 布尔值：真
+b = False  # 布尔值：假
+
+# 与运算（and）：两边都为True，结果才为True
+yu_yun_suan = a and b  # True and False → False
+print("a and b的结果：", yu_yun_suan, "，类型：", type(yu_yun_suan))
+
+# 或运算（or）：至少一边为True，结果就为True
+huo_yun_suan = a or b  # True or False → True
+print("a or b的结果：", huo_yun_suan)
+
+# 非运算（not）：取反，True变False，False变True
+fei_yun_suan = not a  # not True → False
+print("not a的结果：", fei_yun_suan)
+
+# 数字与布尔值的关系：0为False，非0为True；None为False
+shuzi_0 = 0
+shuzi_5 = 5
+print("0对应的布尔值：", bool(shuzi_0))  # bool(0) → False
+print("5对应的布尔值：", bool(shuzi_5))  # bool(5) → True
+print("None对应的布尔值：", bool(None))  # bool(None) → False
+</script>
+
+<script type="text/x-python" id="p-1-5">
+# 程序5：空值的使用场景
+# 定义空值变量，变量名"kongzhi"对应"空值"
+kongzhi = None  # 空值表示"没有值"，常用于初始化变量或表示缺失数据
+
+# 定义一个未赋值的变量（实际开发中需先初始化，这里用None占位）
+# 场景：表示"用户尚未输入姓名"
+xingming = None  # 先用None表示"暂无姓名"
+print("初始化的姓名（未输入）：", xingming, "，类型：", type(xingming))
+
+# 模拟用户输入姓名后，更新变量值
+xingming = "李四"  # 输入后从None变为字符串
+print("用户输入后的姓名：", xingming, "，类型：", type(xingming))
+
+# 空值与其他类型的比较（None只等于自身）
+print("None == 0？", None == 0)  # False：None不等于数字0
+print("None == ''？", None == '')  # False：None不等于空字符串
+print("None == None？", None == None)  # True：None只等于自身
+
+# 函数返回空值示例（不写return时，默认返回None）
+def wu_fanhui():  # 定义一个无返回值的函数
+    print("这个函数没有return语句")
+
+fanhui_zhi = wu_fanhui()  # 调用函数，接收返回值
+print("函数的返回值：", fanhui_zhi, "，类型：", type(fanhui_zhi))  # 结果为None
+# 定义函数小例子
+def add(a, b):
+    result = a + b # 计算两个数的和
+    return result  # 返回计算结果
+
+# 调用 add 函数，传入参数 3 和 5
+sum_result = add(3, 5)
+print(sum_result)  # 输出：8
+
+#def 函数名(参数列表):
+    #函数体（实现功能的代码）
+    #return 返回值（可选，用于返回结果）
+</script>
+
+<!-- 模块二：Python运算符与表达式 -->
+<script type="text/x-python" id="p-2-1">
+# 程序1：算术运算符（+, -, *, /）
+# 定义两个整数变量，变量名"shu1"对应"数字1"，"shu2"对应"数字2"
+shu1 = 10  # 第一个操作数：10
+shu2 = 3   # 第二个操作数：3
+
+# 加法运算（+）：两数相加
+jia = shu1 + shu2  # 10 + 3 = 13
+print(f"{shu1} + {shu2} = {jia}")  # 输出：10 + 3 = 13
+# print直接输出字符串（需单引号或双引号包裹）、变量或表达式的结果。print格式化输出,在字符串前加 f，用 {} 包裹变量或表达式。
+
+# 减法运算（-）：前者减后者
+jian = shu1 - shu2  # 10 - 3 = 7
+print(f"{shu1} - {shu2} = {jian}")  # 输出：10 - 3 = 7
+
+# 乘法运算（*）：两数相乘
+cheng = shu1 * shu2  # 10 * 3 = 30
+print(f"{shu1} * {shu2} = {cheng}")  # 输出：10 * 3 = 30
+
+# 除法运算（/）：前者除后者（结果为浮点数）
+chu = shu1 / shu2  # 10 / 3 ≈ 3.333...
+print(f"{shu1} / {shu2} = {chu}")  # 输出：10 / 3 = 3.3333333333333335，5是误差
+
+# 补充：整除（//）和取余（%）
+zhengchu = shu1 // shu2  # 10 // 3 = 3（只保留整数部分）
+yushu = shu1 % shu2      # 10 % 3 = 1（除法的余数）
+print(f"{shu1} // {shu2} = {zhengchu}（整除）")
+print(f"{shu1} % {shu2} = {yushu}（取余）")
+</script>
+
+<script type="text/x-python" id="p-2-2">
+# 程序2：比较运算符（==, !=, >, <）
+
+# 定义两个整数变量，"a"和"b"为简写（比较运算常用）
+a = 5   # 第一个比较数：5
+b = 8   # 第二个比较数：8
+
+# 等于（==）：判断两数是否相等，返回布尔值
+dengyu = (a == b)  # 5 == 8 → False
+print(f"{a} == {b} → {dengyu}")  # 输出：5 == 8 → False
+
+# 不等于（!=）：判断两数是否不相等
+budengyu = (a != b)  # 5 != 8 → True
+print(f"{a} != {b} → {budengyu}")  # 输出：5 != 8 → True
+
+# 大于（>）：判断前者是否大于后者
+dayu = (a > b)  # 5 > 8 → False
+print(f"{a} > {b} → {dayu}")  # 输出：5 > 8 → False
+
+# 小于（<）：判断前者是否小于后者
+xiaoyu = (a < b)  # 5 < 8 → True
+print(f"{a} < {b} → {xiaoyu}")  # 输出：5 < 8 → True
+
+# 补充：大于等于（>=）和小于等于（<=）
+dayudengyu = (a >= 5)  # 5 >= 5 → True
+xiaoyudengyu = (b <= 7)  # 8 <= 7 → False
+print(f"{a} >= 5 → {dayudengyu}")
+print(f"{b} <= 7 → {xiaoyudengyu}")
+</script>
+
+<script type="text/x-python" id="p-2-3">
+# 程序3：逻辑运算符（and, or, not）
+
+# 定义三个布尔变量，"x"、"y"、"z"为简写
+x = True    # 布尔值：真
+y = False   # 布尔值：假
+z = True    # 布尔值：真
+
+# 逻辑与（and）：两边都为True，结果才为True
+yu = x and y  # True and False → False
+print(f"{x} and {y} → {yu}")  # 输出：True and False → False
+
+# 逻辑或（or）：至少一边为True，结果为True
+huo = y or z  # False or True → True
+print(f"{y} or {z} → {huo}")  # 输出：False or True → True
+
+# 逻辑非（not）：取反，True变False，False变True
+fei = not x  # not True → False
+print(f"not {x} → {fei}")  # 输出：not True → False
+
+# 复杂逻辑表达式（优先级：not > and > or）
+fuza = not x or y and z  # 等价于 (not x) or (y and z) → False or False → False
+print(f"not {x} or {y} and {z} → {fuza}")
+</script>
+
+<script type="text/x-python" id="p-2-4">
+# 程序4：（二进制）位运算符（&, |, ^）
+#位运算的应用意义：贴近计算机底层，比算术运算（+、-、*、/）更快，无需复杂计算，节省内存。
+
+# 定义两个整数（位运算基于二进制），"wei1"对应"位1"，"wei2"对应"位2"
+wei1 = 2   # 二进制：0b10（十进制2）
+wei2 = 3  # 二进制：0b11（十进制3）
+print(f"{wei1}的二进制：{bin(wei1)}")  # 系统自带bin()函数：将整数转为二进制字符串
+print(f"{wei2}的二进制：{bin(wei2)}")
+
+# 按位与（&）：对应位都为1则为1，否则为0
+wei_and = wei1 & wei2  # 0b10 & 0b11 = 10（十进制2）
+print(f"{wei1} & {wei2} = {wei_and}（二进制：{bin(wei_and)}）")
+
+# 按位或（|）：对应位至少有1则为1，否则为0
+wei_or = wei1 | wei2  # 0b10 | 0b11 = 0b11（十进制3）
+print(f"{wei1} | {wei2} = {wei_or}（二进制：{bin(wei_or)}）")
+
+# 按位异或（^）：对应位不同则为1，相同则为0
+wei_xor = wei1 ^ wei2  # 0b10 ^ 0b11 = 0b01（十进制1）
+print(f"{wei1} ^ {wei2} = {wei_xor}（二进制：{bin(wei_xor)}）")
+</script>
+
+<script type="text/x-python" id="p-2-5">
+# 程序5：混合运算符与优先级
+# 定义变量，"shu1"对应"数字1"，"shu2"对应"数字2"
+shu1 = 10
+shu2 = 2
+
+# 算术运算符优先级：先乘除后加减
+suan_shu = shu1 + shu2 * 3  # 等价于10 + (2*3) = 16
+print(f"{shu1} + {shu2} * 3 = {suan_shu}")
+
+# 比较运算符与算术运算符结合：先算数，后比较。比较运算符（==, !=, >, <）
+bi_jiao = shu1 / 2 > shu2 + 1  # 等价于(10/2) > (2+1) → 5>3 → True
+print(f"{shu1}/2 > {shu2}+1 → {bi_jiao}")
+
+# 逻辑运算符与比较运算符结合：先比较，后逻辑运算。逻辑运算符（and, or, not）
+luo_ji = shu1 > 5  or shu2 == 3  # 等价于True or False → True
+print(f"{shu1}>5 or {shu2}==3 → {luo_ji}")
+
+# 优先级总结：括号 > 算术  > 比较 > 逻辑
+</script>
+
+<!-- 模块三：Python控制流 -->
+<script type="text/x-python" id="p-3-1">
+# 程序1：if-elif-else条件语句（成绩评级）
+
+# 定义成绩变量，"chengji"对应"成绩"，取值范围0-100
+chengji = 85  # 假设成绩为85分
+print(f"当前成绩：{chengji}分")
+
+# if条件语句：判断条件是否成立，成立则执行缩进内的代码
+if chengji >= 90:  # 条件1：成绩大于等于90分
+    print("评级：优秀")  # 条件1成立时执行
+# elif：当前面的条件不成立时，判断下一个条件（可多个）
+elif chengji >= 80:  # 条件2：成绩大于等于80分（且小于90分，因条件1不成立）
+    print("评级：良好")  # 条件2成立时执行
+elif chengji >= 60:  # 条件3：成绩大于等于60分（且小于80分）
+    print("评级：及格")  # 条件3成立时执行
+# else：所有条件都不成立时执行（可选）
+else:
+    print("评级：不及格")  # 成绩小于60分时执行
+
+# 备注：条件判断从上到下执行，找到第一个成立的条件后，后面的条件不再判断
+</script>
+
+<script type="text/x-python" id="p-3-2">
+# 程序2：for循环（遍历字符串和列表）
+
+# 利用for和range /reɪndʒ/ 生成数列。
+# range(start, stop)：生成从 start 开始，到 stop - 1 结束的整数序列。/reɪndʒ/
+# range(stop)：生成从 0 开始，到 stop - 1 结束的整数序列。
+# range(start, stop, step)：生成从 start 开始，到 stop - 1 结束，并且每个数字之间的间隔为 step 的整数序列。
+
+for i in range(1, 5):
+    print(i)
+
+
+# 定义字符串变量，"zifuchuan"对应"字符串"
+zifuchuan = "Python"
+print(f"遍历字符串'{zifuchuan}'的每个字符：")
+
+# for循环：遍历序列（字符串、列表等）中的每个元素
+# 变量"zi"对应"字（符）"，临时存储每次遍历的元素
+for zi in zifuchuan:
+    print(zi)  # 依次输出字符串中的每个字符（P、y、t、h、o、n）
+
+# 定义列表变量，列表之后会讲解，"shulie"对应"数列"，存储一组整数。
+shulie = [10, 20, 30, 40]
+print("\n遍历列表中的每个元素并计算平方：")
+
+# 遍历列表，变量"shu"对应"数"
+for shu in shulie:
+    pingfang = shu **2  # 计算平方（** 是幂运算符）
+    print(f"{shu}的平方是{pingfang}")  # 依次输出每个数的平方
+</script>
+
+<script type="text/x-python" id="p-3-3">
+# 程序3：while循环（条件循环）
+
+# 定义计数器变量，"jishuqi"对应"计数器"，初始值为1
+jishuqi = 1
+# 定义循环次数上限，"shangxian"对应"上限"
+shangxian = 5
+
+print(f"使用while循环输出1到{shangxian}的数字：")
+
+# while循环：当条件成立时，重复执行缩进内的代码
+# 条件：计数器小于等于上限
+while jishuqi <= shangxian:
+    print(jishuqi)  # 输出当前计数器的值
+    jishuqi += 1  # 计数器自增1（等价于jishuqi = jishuqi + 1）
+    # 注意：若忘记更新计数器，会导致无限循环！
+
+# 循环结束后执行（缩进外的代码）
+print("循环结束！")
+</script>
+
+<script type="text/x-python" id="p-3-4">
+# 程序4：break语句（跳出循环）
+# 在列表中查找指定元素，找到后跳出循环
+numbers = [1, 3, 5, 7, 9, 2, 4, 6]
+target = 2  # 要查找的目标
+
+for num in numbers:
+    if num == target:
+        print(f"找到了目标元素：{num}")
+        break  # 找到后立即跳出循环，不再继续遍历
+else:
+    # 循环正常结束（未触发 break）时执行（即未找到目标）
+    print(f"未找到目标元素：{target}")
+</script>
+
+<script type="text/x-python" id="p-3-5">
+# 程序5：continue语句（跳过本次迭代）
+
+# 定义循环范围，计算1-10中的奇数和
+# "qishu_he"对应"奇数和"，初始值0
+qishu_he = 0
+# "zongshu"对应"总数"，范围1到10（包含10）
+zongshu = range(1, 11)  # range(1,11)生成1-10的数字序列
+
+print("计算1-10中的奇数和：")
+# for循环遍历1-10的数字
+for shu in zongshu:
+    # 判断是否为偶数（能被2整除）
+    if shu % 2 == 0:
+        continue  # continue语句：跳过本次循环的剩余代码，直接进入下一次迭代
+    # 若为奇数，则累加（只有奇数会执行这里）
+    qishu_he += shu
+    print(f"当前奇数：{shu}，累计和：{qishu_he}")
+
+# 循环结束后，输出最终结果
+print(f"1-10的奇数和为：{qishu_he}")
+</script>
+
+<!-- 模块四：Python序列类型 -->
+<script type="text/x-python" id="p-4-1">
+# 程序1：列表（List）的基本操作
+
+# 定义列表变量，"shangpin"对应"商品"，存储商品名称（可变序列）
+shangpin = ["苹果", "香蕉", "橙子"]
+print("初始商品列表：", shangpin)
+
+# append()：在列表末尾追加元素
+shangpin.append("西瓜")  # 追加"西瓜"到列表最后
+print("追加'西瓜'后：", shangpin)  # 结果：['苹果', '香蕉', '橙子', '西瓜']
+
+# 修改元素：通过索引直接赋值（列表可变特性）
+shangpin[1] = "葡萄"  # 将索引1的元素（原"香蕉"）改为"葡萄"
+print("修改索引1的元素后：", shangpin)  # 结果：['苹果', '葡萄', '橙子', '西瓜']
+
+# extend()：合并另一个列表（批量添加元素）
+fujia = ["草莓", "芒果"]  # "fujia"对应"附加"，临时列表
+shangpin.extend(fujia)  # 将fugai的元素添加到shangpin末尾
+print("合并附加列表后：", shangpin)  # 结果：['苹果', '葡萄', '橙子', '西瓜', '草莓', '芒果']
+
+# pop()：删除指定索引的元素（默认删除最后一个）
+shangpin.pop(2)  # 删除索引2的元素（"橙子"）
+print("删除索引2的元素后：", shangpin)  # 结果：['苹果', '葡萄', '西瓜', '草莓', '芒果']
+
+# 查看列表长度：len()函数
+print("当前列表长度（商品数量）：", len(shangpin))  # 结果：5
+</script>
+
+<script type="text/x-python" id="p-4-2">
+# 程序2：元组（Tuple）的特性与使用
+
+#元组（Tuple）是 Python 中一种不可变、有序的序列类型，用于存储多个不同类型的元素，
+#是列表（List）的 "不可变版本"，核心特点是创建后无法修改元素，兼具稳定性和高效性
+
+# 定义元组变量，"riqi"对应"日期"，存储年、月、日（不可变序列）
+# 元组用小括号包裹，元素用逗号分隔
+riqi = (2025, 10, 30)
+print("日期元组：", riqi)
+
+# 访问元组元素：通过索引（与列表相同）
+nian = riqi[0]  # "nian"对应"年"，取第1个元素（索引0）
+yue = riqi[1]   # "yue"对应"月"，取第2个元素（索引1）
+ri = riqi[2]    # "ri"对应"日"，取第3个元素（索引2）
+print(f"分解为：{nian}年{yue}月{ri}日")
+# print直接输出字符串（需单引号或双引号包裹）、变量或表达式的结果。print格式化输出,在字符串前加 f，用 {} 包裹变量或表达式。
+
+#riqi[0]=2024 # 不可修改，会报错
+
+
+# 元组的常见用途：函数返回多个值（本质是元组）
+def get_shijian():
+    return (9, 30, 45)  # 返回时可省略括号，等价于return 9,30,45
+shi, fen, miao = get_shijian()  # 解包元组，分别赋值给变量
+print(f"当前时间：{shi}时{fen}分{miao}秒")
+</script>
+
+<script type="text/x-python" id="p-4-3">
+# 程序3：字典（Dict）的键值对操作
+#字典（Dictionary）是 Python 中无序、可变的映射类型（Mapping Type）
+#核心作用是通过键（Key） 快速查找值（Value） ，而非通过索引（区别于列表 / 元组）。
+#字典的底层是哈希表实现，查找、添加、删除操作的时间复杂度均为 O (1)，效率极高。
+
+
+# 定义字典变量，"xuesheng"对应"学生"，存储学生信息（键值对结构）
+# 字典用大括号包裹，格式：{键1:值1, 键2:值2,...}，键唯一且不可变
+xuesheng = {
+    "xuehao": "2025001",  # "xuehao"对应"学号"（键），值为字符串
+    "xingming": "张三",   # "xingming"对应"姓名"
+    "nianling": 18        # "nianling"对应"年龄"，值为整数
+}
+print("初始学生字典：", xuesheng)
+
+# 通过键访问值
+print("学生姓名：", xuesheng["xingming"])  # 结果：张三
+
+# 添加新键值对
+xuesheng["banji"] = "高一(1)班"  # "banji"对应"班级"，新增键值对
+print("添加班级后：", xuesheng)
+
+# 修改值（通过键重新赋值）
+xuesheng["nianling"] = 19  # 将年龄从18改为19
+print("修改年龄后：", xuesheng)
+
+# 删除键值对（del语句）
+del xuesheng["xuehao"]  # 删除"xuehao"键及对应值
+print("删除学号后：", xuesheng)
+
+# 遍历字典的键和值（items()方法返回键值对，固定用法）
+print("遍历学生信息：")
+for jian, zhi in xuesheng.items():  # "jian"对应"键"，"zhi"对应"值"
+    print(f"{jian}：{zhi}")
+</script>
+
+<script type="text/x-python" id="p-4-4">
+# 程序4：集合（Set）的唯一性与基本运算
+
+#集合（Set）是 Python 中无序、可变、不重复的序列类型，底层基于哈希表实现
+#核心特性是自动去重和高效的成员关系判断，同时支持丰富的集合运算（如交集、并集、差集），常用于数据去重、关系判断等场景
+
+
+# 定义集合变量，"shuiguo1"对应"水果1"，注意集合自动去重
+shuiguo1 = {"苹果", "香蕉", "橙子", "苹果"}  # 重复的"苹果"会被保留一个
+print("水果集合1（自动去重）：", shuiguo1)  # 结果：{'苹果', '香蕉', '橙子'}
+
+# 定义另一个集合，"shuiguo2"对应"水果2"
+shuiguo2 = {"香蕉", "葡萄", "西瓜"}
+print("水果集合2：", shuiguo2)
+
+# 并集（| 或 union()）：所有元素的总和（无重复）
+bingji = shuiguo1 | shuiguo2  # 等价于shuiguo1.union(shuiguo2)
+print("并集（所有水果）：", bingji)  # 结果：{'苹果', '香蕉', '橙子', '葡萄', '西瓜'}
+
+# 交集（& 或 intersection()）：两个集合都有的元素
+jiaoji = shuiguo1 & shuiguo2  # 等价于shuiguo1.intersection(shuiguo2)
+print("交集（共同水果）：", jiaoji)  # 结果：{'香蕉'}
+
+# 差集（- 或 difference()）：集合1有而集合2没有的元素
+chaji = shuiguo1 - shuiguo2  # 等价于shuiguo1.difference(shuiguo2)
+print("差集（水果1独有的）：", chaji)  # 结果：{'苹果', '橙子'}
+
+# 向集合添加元素（add()）
+shuiguo1.add("芒果")
+print("添加'芒果'后的水果1：", shuiguo1)
+</script>
+
+<script type="text/x-python" id="p-4-5">
+# 程序5：四种数据结构的综合对比
+
+# 1. 列表（List）：可变、有序、可重复
+shuzu = [1, 2, 3, 2]  # "shuzu"对应"数组"
+print("列表：", shuzu, "，类型：", type(shuzu))
+shuzu[0] = 0  # 可修改
+print("修改后的列表：", shuzu)
+
+# 2. 元组（Tuple）：不可变、有序、可重复
+yuanzu = (1, 2, 3, 2)  # "yuanzu"对应"元组"
+print("\n元组：", yuanzu, "，类型：", type(yuanzu))
+#yuanzu[0] = 0  # 不可修改，会报错
+
+
+# 3. 字典（Dict）：可变、（Python 3.7+有序）、键唯一
+zidian = {"a":1, "b":2, "c":3}  # "zidian"对应"字典"
+print("\n字典：", zidian, "，类型：", type(zidian))
+zidian["a"] = 0  # 可修改值
+print("修改后的字典：", zidian)
+
+# 4. 集合（Set）：可变、无序、可重复、元素唯一
+jihe = {1, 2, 3, 2}  # "jihe"对应"集合"
+print("\n集合：", jihe, "，类型：", type(jihe))
+jihe.add(4)  # 可添加元素
+print("添加元素后的集合：", jihe)
+
+# 总结特性，以下可以不讲
+print("\n特性总结：")
+print("列表：[]包裹，可变，有序，可重复 → 适合存储可修改的序列数据")
+print("元组：()包裹，不可变，有序，可重复 → 适合存储固定不变的数据")
+print("字典：{}包裹（键值对），可变，键唯一 → 适合通过键快速查询数据")
+print("集合：{}包裹（单元素），可变，元素唯一 → 适合去重和集合运算")
+</script>
+
+<!-- 模块五：Python字符串操作 -->
+<script type="text/x-python" id="p-5-1">
+# 程序1：使用f-string函数格式化输出
+
+# 定义基础变量，用于格式化字符串
+# "xingming"对应"姓名"，"nianling"对应"年龄"，"chengji"对应"成绩"
+xingming = "李四"
+nianling = 17
+chengji = 92.5
+
+# 基本f-string：用f开头，变量用{ }包裹直接嵌入字符串
+# 格式：f"文本{变量}文本"
+jiben = f"{xingming}今年{nianling}岁，数学成绩是{chengji}分"
+print("基本f-string格式化：", jiben)
+# 输出：李四今年17岁，数学成绩是92.5分
+
+# 格式化数字：指定小数位数（:.2f表示保留2位小数）
+xiaoshu = f"成绩保留2位小数：{chengji:.2f}"  # 92.5 → 92.50
+print(xiaoshu)
+
+# 格式化表达式：{ }内可直接写运算
+biaodashi = f"明年年龄：{nianling + 1}岁，成绩的一半：{chengji / 2:.1f}"
+print(biaodashi)
+# 输出：明年年龄：18岁，成绩的一半：46.3
+
+# 备注：f-string是Python 3.6+引入的，简洁高效，推荐优先使用
+</script>
+
+<script type="text/x-python" id="p-5-2">
+# 程序2：使用format()函数格式化输出方法
+
+# 定义变量，"dianying"对应"电影"，"fen"对应"评分"，"piaofang"对应"票房"
+dianying = "流浪地球"
+fen = 9.2
+piaofang = 46.8
+
+# 基本format()：用{}作为占位符，通过format()传入变量
+# 格式："文本{}文本{}".format(变量1, 变量2)
+jiben = "电影《{}》的评分为{}，票房{}亿".format(dianying, fen, piaofang)
+print("基本format()：", jiben)
+# 输出：电影《流浪地球》的评分为9.2，票房46.8亿
+
+# 按索引指定变量（索引从0开始）
+suoyin = "评分：{1}，电影名：{0}".format(dianying, fen)  # {1}对应第二个变量fen
+print("按索引：", suoyin)  # 输出：评分：9.2，电影名：流浪地球
+
+# 按名称指定变量（更清晰）
+mingcheng = "电影：{name}，票房：{money}亿".format(name=dianying, money=piaofang)
+print("按名称：", mingcheng)  # 输出：电影：流浪地球，票房：46.8亿
+
+# 格式化整数和浮点数（,表示千位分隔符，.1f保留1位小数）
+shuzi = "票房：{:,.1f}万".format(piaofang * 10000)  # 46.8亿 → 468,000.0万
+print("数字格式化：", shuzi)
+</script>
+
+<script type="text/x-python" id="p-5-3">
+# 程序3：split()方法（字符串分割）
+
+# 定义待分割的字符串
+# "juzi"对应"句子"（含逗号分隔），"shuju"对应"数据"（含空格分隔）
+juzi = "苹果,香蕉,橙子,西瓜"  # 逗号分隔的水果列表
+shuju = "2025 10 30 08 30"    # 空格分隔的日期时间
+
+# 基本split()：默认按任意空白字符分割（空格、换行等），返回列表
+fenge_shuju = shuju.split()  # 不指定分隔符，按空格分割
+print("按空白分割数据：", fenge_shuju)
+# 输出：['2025', '10', '30', '08', '30']（列表类型）
+
+# 指定分隔符分割：split("分隔符")
+fenge_juzi = juzi.split(",")  # 按逗号分割
+print("按逗号分割句子：", fenge_juzi)
+# 输出：['苹果', '香蕉', '橙子', '西瓜']
+
+# 限制分割次数：split("分隔符", 次数)
+xianzhi = juzi.split(",", 2)  # 最多分割2次（得到3个元素）
+print("限制分割2次：", xianzhi)  # 输出：['苹果', '香蕉', '橙子,西瓜']
+
+# 实际应用：分割日期为年、月、日
+riqi = "2025-10-30"
+nian, yue, ri = riqi.split("-")  # 解包分割结果到变量
+print(f"分割后：{nian}年{yue}月{ri}日")  # 输出：2025年10月30日
+</script>
+
+<script type="text/x-python" id="p-5-4">
+# 程序4：join()方法（字符串合并）
+
+# 定义列表，用于合并为字符串
+# "chengshi"对应"城市"，"shuzi"对应"数字"
+chengshi = ["北京", "上海", "广州", "深圳"]  # 城市列表
+shuzi = ["1", "2", "3", "4", "5"]            # 数字字符串列表
+
+# 基本join()：用指定字符串连接列表中的元素，返回新字符串
+# 格式："连接符".join(列表)
+hebing_chengshi = "-".join(chengshi)  # 用"-"连接城市
+print("用'-'连接城市：", hebing_chengshi)
+# 输出：北京-上海-广州-深圳
+
+# 用空字符串连接（拼接）
+hebing_shuzi = "".join(shuzi)  # 无连接符，直接拼接
+print("拼接数字：", hebing_shuzi)  # 输出：12345
+
+# 用换行符连接（适合多行文本）
+duohang = "\n".join(chengshi)  # 用换行符分隔
+print("多行显示城市：")
+print(duohang)  # 输出：
+# 北京
+# 上海
+# 广州
+# 深圳
+
+#以下可以不讲
+# 注意：join()的参数必须是字符串列表，否则会报错
+try:
+    [1, 2, 3].join(",")  # 列表元素是整数，不是字符串
+except AttributeError as e:
+    print("错误示例（非字符串列表）：", e)
+</script>
+
+<script type="text/x-python" id="p-5-5">
+# 程序5：strip()和find()方法（去空格与查找）
+
+# 定义带空格和特殊字符的字符串
+# "you_kongge"对应"有空格"，"wenben"对应"文本"
+you_kongge = "    hello world  \n"  # 前后有空格、制表符(\t)、换行符(\n)
+wenben = "Python是一门强大的编程语言，Python很容易学习"  #这个文本一会用到
+print(you_kongge)
+
+# strip()：去除字符串前后的空白字符（不影响中间）
+qu_kongge = you_kongge.strip()
+print("原始字符串（含空白）：", repr(you_kongge))  # repr()显示特殊字符
+print("strip()后：", repr(qu_kongge))  # 输出：'hello world'
+
+# lstrip()：只去除左侧空白；rstrip()：只去除右侧空白
+zuo_qu = you_kongge.lstrip()  # 去左侧空白
+you_qu = you_kongge.rstrip()  # 去右侧空白
+print("左侧去空白：", repr(zuo_qu))  # 输出：'hello world  \t\n'
+print("右侧去空白：", repr(you_qu))  # 输出：'   hello world'
+
+# find()：查找子串位置，返回第一个匹配的索引；未找到返回-1
+# "zichuan"对应"子串"
+zichuan = "Python"
+weizhi1 = wenben.find(zichuan)  # 查找第一个"Python"的位置
+weizhi2 = wenben.find(zichuan, 10)  # 从索引10开始查找
+print(f"文本：{wenben}")
+print(f"第一个'{zichuan}'的位置：{weizhi1}")  # 输出：0（从0开始）
+print(f"从索引10开始查找'{zichuan}'的位置：{weizhi2}")  # 输出：14
+
+# 应用：判断子串是否存在
+if wenben.find("强大") != -1:
+    print("文本中包含'强大'")  # 条件成立，会输出
+else:
+    print("文本中不包含'强大'")
+</script>
+
+<!-- 模块六：Python文件操作 -->
+<script type="text/x-python" id="p-6-1">
+# 程序1：使用with语句写入文件（w模式）
+
+# 定义文件名和内容变量
+# "wenjianming"对应"文件名"，"neirong"对应"内容"
+wenjianming = "shuju.txt"  # 要创建/写入的文件名   程序目录下自动生成 shuju.txt
+neirong = "这是第一行内容\n这是第二行内容\n"  # \n表示换行
+
+# with语句：自动管理文件关闭，避免忘记close()导致的资源泄露
+# open(文件名, 模式)：以写入模式（w）打开文件
+# 若文件不存在则创建，若存在则覆盖原有内容
+with open(wenjianming, 'w', encoding='utf-8') as f:  # 'f'是文件对象的简写（文件） utf-8通用的字符编码格式
+    # write()方法：将字符串写入文件
+    xie_zhuangtai = f.write(neirong)  # 返回写入的字符数
+    print(f"写入完成，共写入{ xie_zhuangtai }个字符")
+
+# 验证写入结果：读取文件内容（后续程序会详细讲读取，这里简单展示）
+with open(wenjianming, 'r', encoding='utf-8') as f:
+    print("文件内容：")
+    print(f.read())  # 输出刚才写入的两行内容
+</script>
+
+<script type="text/x-python" id="p-6-2">
+# 程序2：追加内容到文件（a模式）
+
+# 定义文件名和要追加的内容
+# "wenjian"对应"文件"，"zhuijia_neirong"对应"追加内容"
+wenjian = "shuju.txt"  # 已存在的文件（程序1创建的）
+zhuijia_neirong = "这是追加的第三行\n这是追加的第四行\n"
+
+# 以追加模式（a）打开文件：新内容会添加到文件末尾，不覆盖原有内容
+with open(wenjian, 'a', encoding='utf-8') as f:
+    f.write(zhuijia_neirong)  # 写入追加内容
+    print("追加内容完成")
+
+# 查看追加后的结果
+with open(wenjian, 'r', encoding='utf-8') as f:
+    print("追加后的文件内容：")
+    print(f.read())  # 输出原有两行+新增两行，共四行
+</script>
+
+<script type="text/x-python" id="p-6-3">
+# 程序3：读取整个文件（r模式与read()）
+
+# 定义要读取的文件名
+# "du_qu_wenjian"对应"读取文件"
+du_qu_wenjian = "shuju.txt"  # 程序1和2操作过的文件
+
+# 以只读模式（r）打开文件（默认模式，可省略'r'）
+with open(du_qu_wenjian, 'r', encoding='utf-8') as f:
+    # read()方法：读取整个文件内容，返回一个字符串
+    quanbu_neirong = f.read()
+    print("使用read()读取的全部内容：")
+    print(quanbu_neirong)  # 输出文件所有行
+    
+    # 读取后文件指针在末尾，再次read()会返回空字符串，同一循环只能读取一次
+    zai_du = f.read()
+    print("再次read()的结果（指针在末端）：", repr(zai_du))  # 输出''
+
+# 读取小文件时推荐用read()，大文件可能占用过多内存
+</script>
+
+<script type="text/x-python" id="p-6-4">
+# 程序4：逐行读取文件（readline()）
+
+# 定义文件名，使用程序1-3创建的文件
+# "hang_du_qu"对应"行读取"
+hang_du_qu = "shuju.txt"
+
+print("使用readline()逐行读取：")
+with open(hang_du_qu, 'r', encoding='utf-8') as f:
+    # readline()：每次读取一行内容，返回包含换行符的字符串
+    # 当读到文件末尾时，返回空字符串
+    di_yi_hang = f.readline()
+    print(f"第一行：{repr(di_yi_hang)}")  # repr()显示换行符\n
+    
+    di_er_hang = f.readline()
+    print(f"第二行：{repr(di_er_hang)}")
+    
+    # 循环读取剩余所有行
+    print("剩余行：")
+    while True:
+        hang = f.readline()  # 读取一行
+        if not hang:  # if真就执行break，hang空为假，not hang为真，执行break。若读取到空字符串，说明到末尾
+            break
+        print(hang.strip())  # strip()去除换行符后输出
+
+# 逐行读取适合大文件，节省内存（不需要一次性加载全部内容）
+</script>
+
+<script type="text/x-python" id="p-6-5">
+# 程序5：文件读写综合应用（复制文件）
+
+# 定义源文件和目标文件（复制的源和目的地）
+# "yuan_wenjian"对应"源文件"，"mu_biao_wenjian"对应"目标文件"
+yuan_wenjian = "shuju.txt"  # 要复制的源文件
+mu_biao_wenjian = "shuju_fuzhi.txt"  # 复制后的新文件
+
+# 同时打开源文件（读）和目标文件（写）
+with open(yuan_wenjian, 'r', encoding='utf-8') as yuan_f, \
+    open(mu_biao_wenjian, 'w', encoding='utf-8') as mu_biao_f:
+        
+    # 方法1：一次性读取并写入（适合小文件）
+    neirong = yuan_f.read()
+    mu_biao_f.write(neirong)
+        
+        # 方法2：逐行读取并写入（适合大文件）
+        #for hang in yuan_f:  # 直接遍历文件对象，每次获取一行
+            #mu_biao_f.write(hang)  # 写入一行到目标文件
+    
+print(f"文件复制完成：{yuan_wenjian} → {mu_biao_wenjian}")
+    
+    # 验证复制结果
+with open(mu_biao_wenjian, 'r', encoding='utf-8') as f:
+    print("复制后的文件内容：")
+    print(f.read())
+</script>
+
+<script>
+    // =====================================================
+    // 1. 课程数据（六大模块 · 30 个程序）
+    // =====================================================
+    const MODULES = [
+        {
+            name: "Python变量与数据类型",
+            icon: '<svg viewBox="0 0 24 24"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"/><path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 0 2 2 2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"/></svg>',
+            progs: [
+                { id: "p-1-1", title: "程序1：基本数据类型的定义与输出", points: ["int", "float", "str", "bool", "None", "type()"] },
+                { id: "p-1-2", title: "程序2：数据类型转换示例", points: ["int()", "str()", "float()", "类型转换"] },
+                { id: "p-1-3", title: "程序3：字符串的基本操作", points: ["拼接 +", "重复 *", "len()", "索引"] },
+                { id: "p-1-4", title: "程序4：布尔值的逻辑运算", points: ["and", "or", "not", "bool()"] },
+                { id: "p-1-5", title: "程序5：空值的使用场景", points: ["None", "初始化", "函数返回值", "def"] }
+            ]
+        },
+        {
+            name: "Python运算符与表达式",
+            icon: '<svg viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="12" x2="8" y2="12.01"/><line x1="12" y1="12" x2="12" y2="12.01"/><line x1="16" y1="12" x2="16" y2="12.01"/><line x1="8" y1="17" x2="8" y2="17.01"/><line x1="12" y1="17" x2="12" y2="17.01"/><line x1="16" y1="17" x2="16" y2="17.01"/></svg>',
+            progs: [
+                { id: "p-2-1", title: "程序1：算术运算符", points: ["+ - * /", "// 整除", "% 取余", "f-string"] },
+                { id: "p-2-2", title: "程序2：比较运算符", points: ["== !=", "> <", ">= <="] },
+                { id: "p-2-3", title: "程序3：逻辑运算符", points: ["and", "or", "not", "优先级"] },
+                { id: "p-2-4", title: "程序4：（二进制）位运算符", points: ["& | ^", "bin()", "二进制"] },
+                { id: "p-2-5", title: "程序5：混合运算符与优先级", points: ["括号", "算术", "比较", "逻辑"] }
+            ]
+        },
+        {
+            name: "Python控制流",
+            icon: '<svg viewBox="0 0 24 24"><circle cx="12" cy="4" r="2"/><path d="M12 6v5"/><path d="M12 11L6 15"/><path d="M12 11l6 4"/><circle cx="5" cy="17" r="2"/><circle cx="19" cy="17" r="2"/></svg>',
+            progs: [
+                { id: "p-3-1", title: "程序1：if-elif-else条件语句（成绩评级）", points: ["if", "elif", "else"] },
+                { id: "p-3-2", title: "程序2：for循环（遍历字符串和列表）", points: ["for", "range()", "遍历", "** 幂"] },
+                { id: "p-3-3", title: "程序3：while循环（条件循环）", points: ["while", "自增 +=", "死循环防范"] },
+                { id: "p-3-4", title: "程序4：break语句（跳出循环）", points: ["break", "for-else", "查找"] },
+                { id: "p-3-5", title: "程序5：continue语句（跳过本次迭代）", points: ["continue", "% 奇偶判断", "累加"] }
+            ]
+        },
+        {
+            name: "Python序列类型",
+            icon: '<svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.2"/><circle cx="3.5" cy="12" r="1.2"/><circle cx="3.5" cy="18" r="1.2"/></svg>',
+            progs: [
+                { id: "p-4-1", title: "程序1：列表（List）的基本操作", points: ["append", "extend", "pop", "索引赋值"] },
+                { id: "p-4-2", title: "程序2：元组（Tuple）的特性与使用", points: ["不可变", "索引", "解包", "多返回值"] },
+                { id: "p-4-3", title: "程序3：字典（Dict）的键值对操作", points: ["键值对", "del", "items()", "遍历"] },
+                { id: "p-4-4", title: "程序4：集合（Set）的唯一性与基本运算", points: ["去重", "并 | 交 &", "差 -", "add()"] },
+                { id: "p-4-5", title: "程序5：四种数据结构的综合对比", points: ["List", "Tuple", "Dict", "Set"] }
+            ]
+        },
+        {
+            name: "Python字符串操作",
+            icon: '<svg viewBox="0 0 24 24"><path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/></svg>',
+            progs: [
+                { id: "p-5-1", title: "程序1：f-string格式化（推荐方法）", points: ["f-string", ":.2f", "表达式嵌入"] },
+                { id: "p-5-2", title: "程序2：使用format()函数格式化输出方法", points: ["format()", "索引占位", "命名占位", "千位分隔"] },
+                { id: "p-5-3", title: "程序3：split()方法（字符串分割）", points: ["split()", "分隔符", "分割次数", "解包"] },
+                { id: "p-5-4", title: "程序4：join()方法（字符串合并）", points: ["join()", "连接符", "拼接"] },
+                { id: "p-5-5", title: "程序5：strip()和find()方法（去空格与查找）", points: ["strip()", "lstrip/rstrip", "find()", "repr()"] }
+            ]
+        },
+        {
+            name: "Python文件操作",
+            icon: '<svg viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M13 2v7h7"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>',
+            progs: [
+                { id: "p-6-1", title: "程序1：使用with语句写入文件（w模式）", points: ["with", "open(w)", "write()"] },
+                { id: "p-6-2", title: "程序2：追加内容到文件（a模式）", points: ["open(a)", "追加写入"] },
+                { id: "p-6-3", title: "程序3：读取整个文件（r模式与read()）", points: ["open(r)", "read()", "文件指针"] },
+                { id: "p-6-4", title: "程序4：逐行读取文件（readline()）", points: ["readline()", "while", "strip()"] },
+                { id: "p-6-5", title: "程序5：文件读写综合应用（复制文件）", points: ["读+写", "文件复制", "综合应用"] }
+            ]
+        }
+    ];
+
+    // =====================================================
+    // 2. 渲染左侧导航
+    // =====================================================
+    const navContainer = document.getElementById('nav-container');
+    let currentProg = null;
+
+    MODULES.forEach((mod, mi) => {
+        const modDiv = document.createElement('div');
+        modDiv.className = 'module' + (mi === 0 ? ' open' : '');
+
+        let progHtml = '';
+        mod.progs.forEach((p, pi) => {
+            progHtml += `
+                <div class="prog-item" data-id="${p.id}">
+                    <span class="p-no">${String(pi + 1).padStart(2, '0')}</span>
+                    <span class="p-name">${p.title}</span>
+                    <span class="p-done">✔</span>
+                </div>`;
+        });
+
+        modDiv.innerHTML = `
+            <div class="module-head" onclick="this.parentElement.classList.toggle('open')">
+                <div class="m-icon">${mod.icon}</div>
+                <span class="m-name">${mod.name}</span>
+                <span class="m-count">${mod.progs.length}</span>
+                <span class="arrow">▶</span>
+            </div>
+            <div class="module-body">${progHtml}</div>`;
+
+        navContainer.appendChild(modDiv);
+    });
+
+    // 点击程序项 → 加载代码
+    navContainer.addEventListener('click', (e) => {
+        const item = e.target.closest('.prog-item');
+        if (!item) return;
+        loadProgram(item.dataset.id);
+    });
+
+    function findProg(id) {
+        for (const mod of MODULES) {
+            for (const p of mod.progs) {
+                if (p.id === id) return { mod, p };
+            }
+        }
+        return null;
+    }
+
+    function loadProgram(id) {
+        const found = findProg(id);
+        if (!found) return;
+        const { mod, p } = found;
+
+        document.querySelectorAll('.prog-item').forEach(el => el.classList.remove('active'));
+        const itemEl = document.querySelector(`.prog-item[data-id="${id}"]`);
+        if (itemEl) itemEl.classList.add('active');
+
+        document.getElementById('prog-title').innerText = `【${mod.name}】${p.title}`;
+        document.getElementById('prog-points').innerHTML =
+            p.points.map(t => `<span class="chip">${t}</span>`).join('');
+
+        // 左侧：样例代码（只读展示 + 高亮）
+        const src = document.getElementById(id).textContent.replace(/^\n/, '');
+        const sampleEl = document.getElementById('sample-code');
+        sampleEl.innerHTML = highlightPy(src);
+        sampleEditor.dataset.src = src; // 保留原文供 runSample 用
+
+        // 右侧：切换前保存当前练习代码，载入该程序的练习代码（首次为空白）
+        if (currentProg && practiceStore[currentProg] !== undefined) {
+            practiceStore[currentProg] = editor.value;
+        }
+        currentProg = id;
+        editor.value = practiceStore[id] || '';
+        editor.placeholder = `参考左侧样例，在此手动输入「${p.title}」的代码进行练习...`;
+
+        clearConsole(sampleConsole);
+        clearConsole(practiceConsole);
+        logTo(sampleConsole, `已加载样例：${p.title}`, 'c-in');
+        logTo(sampleConsole, '样例仅供阅读参考，请在右侧练习区手动编写代码', 'c-warn');
+    }
+
+    // =====================================================
+    // 3. 双栏运行逻辑（左：样例只读 / 右：手动练习）
+    // =====================================================
+    const editor = document.getElementById('py-code');            // 右侧：练习编辑器
+    const sampleEditor = document.getElementById('sample-code');  // 左侧：样例（只读 <pre>，不直接读写 value）
+    const practiceConsole = document.getElementById('console');
+    const sampleConsole = document.getElementById('console-sample');
+    const runState = document.getElementById('run-state');
+    const runStateSample = document.getElementById('run-state-sample');
+    const practiceStore = {};   // 各程序练习代码暂存（切换程序时保留）
+    let pyodide = null;
+    let isRunning = false;
+    let activeConsole = practiceConsole;   // 输出路由：stdout/stderr 写入当前运行对应的控制台
+
+    function logTo(el, msg, cls) {
+        const div = document.createElement('div');
+        if (cls) div.className = cls;
+        div.textContent = msg;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+    }
+    function log(msg, cls) { logTo(practiceConsole, msg, cls); }
+    function clearConsole(el) { el.innerHTML = ''; }
+
+    // ===== 语法高亮（深色主题，与杂草训练页风格一致）=====
+    function escHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    // 单遍 token 扫描：高亮字符串/注释/关键字/数字，避免多遍正则互相破坏
+    function highlightPy(code) {
+        const KW = new Set(['from','import','def','return','if','else','elif','for','while','in','as',
+                           'None','True','False','with','class','raise','try','except','finally',
+                           'lambda','yield','pass','continue','break','and','or','not',
+                           'print','range','len','type','int','str','float','bool','open','read','write']);
+        let out = '';
+        let i = 0;
+        const n = code.length;
+        // 局部替换函数（仅对 plain 文本做转义）
+        const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        while (i < n) {
+            const ch = code[i];
+            // 1) 注释：# 到行尾（遇到换行就停，绝不能吞掉后续代码）
+            if (ch === '#') {
+                let j = i;
+                while (j < n && code[j] !== '\n') j++;
+                out += '<span class="com">' + esc(code.slice(i, j)) + '</span>';
+                i = j;
+                continue;
+            }
+            // 2) 三引号字符串（docstring）
+            if ((ch === '"' || ch === "'") && code.substr(i, 3) === ch.repeat(3)) {
+                const end = code.indexOf(ch.repeat(3), i + 3);
+                const stop = end === -1 ? n : end + 3;
+                out += '<span class="str">' + esc(code.slice(i, stop)) + '</span>';
+                i = stop;
+                continue;
+            }
+            // 3) 单/双引号字符串
+            if (ch === '"' || ch === "'") {
+                let j = i + 1;
+                while (j < n && code[j] !== ch) {
+                    if (code[j] === '\\') j += 2; else j++;
+                }
+                const stop = j < n ? j + 1 : n;
+                out += '<span class="str">' + esc(code.slice(i, stop)) + '</span>';
+                i = stop;
+                continue;
+            }
+            // 4) 数字
+            if (/\d/.test(ch)) {
+                let j = i;
+                while (j < n && /[\d.]/.test(code[j])) j++;
+                out += '<span class="num">' + esc(code.slice(i, j)) + '</span>';
+                i = j;
+                continue;
+            }
+            // 5) 标识符 / 关键字
+            if (/[A-Za-z_]/.test(ch)) {
+                let j = i;
+                while (j < n && /[A-Za-z0-9_]/.test(code[j])) j++;
+                const word = code.slice(i, j);
+                if (KW.has(word)) {
+                    out += '<span class="kw">' + esc(word) + '</span>';
+                } else if (j < n && code[j] === '(') {
+                    out += '<span class="fn">' + esc(word) + '</span>';
+                } else {
+                    out += esc(word);
+                }
+                i = j;
+                continue;
+            }
+            // 6) 其他字符（标点、空白、换行）原样输出
+            out += esc(ch);
+            i++;
+        }
+        return out;
+    }
+    // 样例区由 loadProgram() 直接写入高亮 HTML，无需再同步
+
+    // 通用执行：src=代码，target=输出控制台
+    async function execute(src, targetConsole, stateEl, btnEl, label) {
+        if (!pyodide) { logTo(targetConsole, '❌ Python 环境尚未就绪，请稍候...', 'c-err'); return false; }
+        if (isRunning) return false;
+        if (!src.trim()) { logTo(targetConsole, '（代码为空）', 'c-warn'); return false; }
+
+        isRunning = true;
+        btnEl.disabled = true;
+        activeConsole = targetConsole;
+        stateEl.innerText = '● RUNNING';
+        stateEl.style.color = '#15803d';
+        logTo(targetConsole, `──────── ${label} ────────`, 'c-in');
+
+        try {
+            await pyodide.runPythonAsync(src);
+            logTo(targetConsole, '✔ 程序执行完毕', 'c-ok');
+            return true;
+        } catch (e) {
+            const msg = String(e.message || e);
+            logTo(targetConsole, '✘ 运行出错：', 'c-err');
+            msg.split('\n').slice(-6).forEach(l => logTo(targetConsole, l, 'c-err'));
+            return false;
+        } finally {
+            isRunning = false;
+            btnEl.disabled = false;
+            stateEl.innerText = '';
+            activeConsole = practiceConsole;
+        }
+    }
+
+    // 右侧：运行我手动输入的代码（成功后标记该程序已完成）
+    window.runCode = function () {
+        execute(editor.value, practiceConsole, runState,
+            document.getElementById('btn-run'), '运行我的程序')
+            .then(ok => { if (ok) markDone(currentProg); });
+    };
+
+    // 左侧：运行样例程序
+    window.runSample = function () {
+        execute(sampleEditor.dataset.src || '', sampleConsole, runStateSample,
+            document.getElementById('btn-run-sample'), '运行样例程序');
+    };
+
+    // 清空练习区
+    window.clearPractice = function () {
+        editor.value = '';
+        clearConsole(practiceConsole);
+    };
+
+    window.showFiles = async function () {
+        if (!pyodide) { log('❌ 环境未就绪', 'c-err'); return; }
+        log('📂 当前虚拟文件系统：', 'c-in');
+        await pyodide.runPythonAsync(`
+import os
+for f in sorted(os.listdir(".")):
+    print("   -", f)
+try:
+    print("--- shuju.txt 内容 ---")
+    print(open("shuju.txt", encoding="utf-8").read())
+except Exception:
+    print("（暂无 shuju.txt，请先运行文件操作模块的程序1）")
+`);
+    };
+
+    // 已运行标记（localStorage 持久化）
+    function markDone(id) {
+        if (!id) return;
+        try {
+            const done = JSON.parse(localStorage.getItem('py-done') || '[]');
+            if (!done.includes(id)) done.push(id);
+            localStorage.setItem('py-done', JSON.stringify(done));
+        } catch (e) { }
+        const itemEl = document.querySelector(`.prog-item[data-id="${id}"]`);
+        if (itemEl) itemEl.classList.add('done');
+    }
+    (function restoreDone() {
+        try {
+            const done = JSON.parse(localStorage.getItem('py-done') || '[]');
+            done.forEach(id => {
+                const el = document.querySelector(`.prog-item[data-id="${id}"]`);
+                if (el) el.classList.add('done');
+            });
+        } catch (e) { }
+    })();
+
+    // Tab 键插入 4 空格
+    editor.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const s = editor.selectionStart, en = editor.selectionEnd;
+            editor.value = editor.value.slice(0, s) + "    " + editor.value.slice(en);
+            editor.selectionStart = editor.selectionEnd = s + 4;
+        }
+    });
+
+    // =====================================================
+    // 4. Pyodide 环境初始化
+    // =====================================================
+    async function initPython() {
+        try {
+            pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/" });
+
+            // stdout/stderr 动态路由到当前运行的程序对应的控制台
+            pyodide.setStdout({ batched: (s) => logTo(activeConsole, s) });
+            pyodide.setStderr({ batched: (s) => logTo(activeConsole, s, 'c-err') });
+            pyodide.setStdin({ stdin: () => prompt('input() 请输入：') });
+
+            // 预置数据文件 shuju.txt（4 行内容），保证文件操作模块的程序可独立运行
+            await pyodide.runPythonAsync(
+                'open("shuju.txt", "w", encoding="utf-8").write(' +
+                '"这是第一行内容\\n这是第二行内容\\n这是追加的第三行\\n这是追加的第四行\\n")'
+            );
+
+            document.getElementById('env-status').innerText = "✔️ 环境就绪";
+            document.getElementById('env-status').classList.add('ok');
+            editor.disabled = false;
+            document.getElementById('btn-run').disabled = false;
+            document.getElementById('btn-run-sample').disabled = false;
+
+            document.getElementById('loading-mask').style.display = 'none';
+            loadProgram('p-1-1');
+            log('✅ Python 运行环境已就绪（浏览器端 Pyodide）', 'c-ok');
+            log('ℹ️ 已预置虚拟数据文件 shuju.txt，文件操作模块程序可直接运行', 'c-warn');
+            log('ℹ️ 提示：左侧可运行样例参考，右侧手动输入代码后点击 [▶ 运行程序]', 'c-warn');
+        } catch (err) {
+            document.getElementById('loading-mask').style.display = 'none';
+            log('❌ Python 初始化失败: ' + err, 'c-err');
+            document.getElementById('env-status').innerText = "❌ 环境加载失败";
+        }
+    }
+
+    // =====================================================
+    // 5. 全页禁止复制 / 剪切 / 粘贴（练习须手动输入）
+    // =====================================================
+    ['copy', 'cut', 'paste'].forEach(ev =>
+        document.addEventListener(ev, (e) => { e.preventDefault(); }, true)
+    );
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('dragstart', (e) => e.preventDefault());
+    document.addEventListener('keydown', (e) => {
+        const k = (e.key || '').toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && ['c', 'v', 'x'].includes(k)) {
+            e.preventDefault();
+        }
+    });
+
+    initPython();
+</script>
+</body>
+</html>

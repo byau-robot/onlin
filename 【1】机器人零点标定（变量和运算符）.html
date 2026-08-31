@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>工业机器人零点标定仿真 (Python PBL 版)</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    <script>
+    async function initPy(){
+      window.pyodide = await loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+      });
+    }
+    initPy();
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #222; display: flex; height: 100vh; font-family: "Microsoft YaHei", sans-serif; }
+        
+        /* 3D 视口 */
+        #canvas-container { flex: 1; position: relative; background: linear-gradient(to bottom, #3a3a3a, #1a1a1a); }
+        
+        /* 顶部提示浮层 */
+        #overlay { position: absolute; top: 10px; left: 10px; pointer-events: none; user-select: none; }
+        .title { color: #FFD700; font-size: 20px; font-weight: bold; text-shadow: 1px 1px 2px black; margin: 0; }
+        .subtitle { color: #aaa; font-size: 12px; margin-top: 5px; }
+        
+        /* 任务提示框 */
+        .task-box { 
+            background: rgba(0,0,0,0.6); border: 1px solid #666; border-radius: 5px; 
+            padding: 10px; margin-top: 10px; color: white; font-size: 13px; line-height: 1.6;
+            pointer-events: auto; width: 280px;
+        }
+        .step-done { color: #0f0; text-decoration: line-through; opacity: 0.6; }
+        .step-active { color: #FFD700; font-weight: bold; }
+
+        /* 中间 Python 编程面板 */
+        #python-panel {
+            width: 400px; background: #1e1e1e; border-left: 2px solid #444; border-right: 2px solid #444;
+            display: flex; flex-direction: column; padding: 12px; box-sizing: border-box; z-index: 10;
+        }
+        .py-header { color: #4fc1ff; font-size: 16px; font-weight: bold; margin-bottom: 10px; display: flex; justify-content: space-between;}
+        #env-status { font-size: 12px; color: #ffcc00; font-weight: normal; }
+        textarea { 
+            flex: 1; background: #2d2d2d; color: #9cdcfe; font-family: "Courier New", monospace; 
+            font-size: 14px; padding: 10px; border: 1px solid #3f3f3f; border-radius: 4px; resize: none; outline: none; 
+        }
+        .py-controls { margin-top: 10px; display: flex; gap: 10px; }
+        .btn-run-py { background: #0e639c; color: white; padding: 10px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; flex: 1; }
+        .btn-run-py:hover { background: #1177bb; }
+        .btn-run-py:disabled { background: #555; cursor: not-allowed; }
+        #py-console { 
+            height: 150px; margin-top: 10px; background: #000; font-family: monospace; 
+            font-size: 12px; padding: 8px; border-radius: 4px; overflow-y: auto; color: #d4d4d4; border: 1px solid #333; white-space: pre-wrap;
+        }
+
+        /* 右侧示教器 */
+        #pendant { 
+            width: 253px; background: #cecece; display: flex; flex-direction: column;
+            padding: 12px; box-sizing: border-box; box-shadow: -5px 0 15px rgba(0,0,0,0.5); user-select: none;
+        }
+        
+        /* 屏幕 */
+        .screen-frame { background: #222; border-radius: 4px; padding: 10px; border: 2px solid #555; margin-bottom: 10px; position: relative; }
+        #screen { background: #000; height: 180px; color: #0f0; font-family: 'Consolas', monospace; font-size: 12px; overflow-y: auto; white-space: pre-wrap; padding: 5px; }
+        #alarm-banner { background: #d00; color: white; font-weight: bold; text-align: center; font-size: 13px; padding: 4px; display: none; animation: blink 1s infinite; margin-bottom: 5px; }
+        @keyframes blink { 50% { opacity: 0.7; } }
+
+        /* 控件区 */
+        .controls { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+        .btn-fault { background: linear-gradient(to bottom, #d9534f, #c9302c); color: white; font-weight: bold; padding: 12px; border: 1px solid #ac2925; border-radius: 4px; cursor: pointer; }
+        .btn-fault:hover { background: #c9302c; }
+        .btn-fix { background: linear-gradient(to bottom, #5cb85c, #4cae4c); color: white; font-weight: bold; padding: 12px; border: 1px solid #4cae4c; border-radius: 4px; cursor: pointer; display: none; }
+        .btn-fix:hover { opacity: 0.9; }
+
+        .jog-panel { background: #e0e0e0; border: 1px solid #bbb; border-radius: 5px; padding: 8px; display: grid; grid-template-columns: 40px 1fr 1fr; gap: 6px; align-items: center; }
+        .jog-header { grid-column: 1 / -1; font-size: 12px; font-weight: bold; color: #555; text-align: center; margin-bottom: 4px; border-bottom: 1px solid #ccc; padding-bottom: 4px;}
+        .axis-label { background: #555; color: white; text-align: center; font-size: 12px; padding: 6px 0; border-radius: 3px; font-weight: bold; transition: background 0.3s; }
+        .axis-label.aligned { background: #28a745; box-shadow: 0 0 5px #28a745; } 
+        .jog-btn { background: #f8f8f8; border: 1px solid #999; border-radius: 3px; padding: 6px; font-weight: bold; cursor: pointer; font-family: monospace; font-size: 14px; }
+        .jog-btn:active { background: #FFD700; border-color: #bba000; }
+        .speed-box { display: flex; align-items: center; background: #ddd; padding: 5px; border-radius: 4px; border: 1px solid #bbb; }
+        .speed-label { font-size: 12px; font-weight: bold; margin-right: 10px; color: #333; }
+        input[type=range] { flex: 1; cursor: pointer; }
+        .btn-run { background: #337ab7; color: white; padding: 10px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; margin-top: auto; }
+        .btn-run:disabled { background: #777; cursor: not-allowed; opacity: 0.7; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <div id="overlay">
+            <div class="title">工业机器人标定仿真 (Python驱动)</div>
+            <div class="subtitle">黑龙江八一农垦大学版权所有</div>
+            
+            <div class="task-box">
+                <div style="border-bottom:1px solid #555; padding-bottom:5px; margin-bottom:5px;">操作指引：</div>
+                <div id="step1" class="step-active">1. 点击右侧 [模拟电池故障]</div>
+                <div id="step2">2. 观察到 SRVO-062 报警</div>
+                <div id="step3">3. 在中间面板使用 Python 代码消除偏差</div>
+                <div id="step4">4. 点击 [执行代码] 完成对齐并标定</div>
+                <div id="step5">5. 点击 [运行演示] 验证标定结果</div>
+                <div style="margin-top:8px; font-size:12px; color:#aaa;">提示：鼠标左键拖动旋转视角，右键平移。</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="python-panel">
+        <div class="py-header">
+            <span>🐍 Python PBL 算法编程区</span>
+            <span id="env-status">环境加载中...</span>
+        </div>
+        <div style="font-size:12px; color:#aaa; margin-bottom:10px;">
+            学习目标：使用<b>变量</b>读取脉冲状态，使用<b>运算符</b>计算偏移角度，驱动机器人回零。
+        </div>
+        <textarea id="py-code" disabled>
+import time
+
+print("--- 启动自动归零标定程序 ---")
+# [变量] 定义：伺服编码器 1 角度 = 1000 脉冲
+PULSE_PER_DEG = 1000  
+
+# 获取各轴丢失零点后的脉冲偏差
+j1_pulse = robot.get_pulse(1)
+j2_pulse = robot.get_pulse(2)
+print(f"J1轴当前偏差脉冲: {j1_pulse}")
+print(f"J2轴当前偏差脉冲: {j2_pulse}")
+
+# [运算符] 计算：需补偿的角度 = - (脉冲数 / 比例)
+j1_target = - (j1_pulse / PULSE_PER_DEG)
+j2_target = - (j2_pulse / PULSE_PER_DEG)
+print(f"计算 J1 需移动: {j1_target:.2f} 度")
+
+# 驱动机器人运动到物理零点
+robot.set_joint_angle(1, j1_target)
+robot.set_joint_angle(2, j2_target)
+
+# J3 到 J6 轴的合并写法
+robot.set_joint_angle(3, - (robot.get_pulse(3) / PULSE_PER_DEG))
+robot.set_joint_angle(4, - (robot.get_pulse(4) / PULSE_PER_DEG))
+robot.set_joint_angle(5, - (robot.get_pulse(5) / PULSE_PER_DEG))
+robot.set_joint_angle(6, - (robot.get_pulse(6) / PULSE_PER_DEG))
+
+time.sleep(1)
+print("--- 物理位置已对齐，执行系统零点标定 ---")
+robot.calibrate_zero()
+</textarea>
+        <div class="py-controls">
+            <button id="btn-run-py" class="btn-run-py" disabled onclick="runPythonCode()">▶ 执行 Python 代码</button>
+        </div>
+        <div id="py-console">系统启动中，等待加载 3D 引擎与 Python 核心库...</div>
+    </div>
+
+    <div id="pendant">
+        <div style="background:#222; color:#FFD700; padding:8px; text-align:center; font-weight:bold; border-radius:4px 4px 0 0; border:2px solid #000; border-bottom:none;">
+            示教器 (Teach Pendant)
+        </div>
+        
+        <div class="screen-frame">
+            <div id="alarm-banner">ALARM: SRVO-062 BZAL (G:1)</div>
+            <div id="screen">
+ R-30iB V8.30
+处理中...
+> 系统就绪.
+> 模式: T1
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="btn-fault" class="btn-fault" onclick="triggerFault()">⚠ 模拟：电池没电 (丢失零点)</button>
+            <button id="btn-fix" class="btn-fix" onclick="attemptMastering()">🎯 位置已对齐 - 手动执行标定</button>
+
+            <div class="jog-panel">
+                <div class="jog-header">关节手动进给 (JOG)</div>
+                <div id="lbl-0" class="axis-label">J1</div>
+                <button class="jog-btn" onmousedown="startJog(0,-1)" onmouseup="stopJog()" onmouseleave="stopJog()">-</button>
+                <button class="jog-btn" onmousedown="startJog(0,1)" onmouseup="stopJog()" onmouseleave="stopJog()">+</button>
+                <div id="lbl-1" class="axis-label">J2</div>
+                <button class="jog-btn" onmousedown="startJog(1,-1)" onmouseup="stopJog()" onmouseleave="stopJog()">-</button>
+                <button class="jog-btn" onmousedown="startJog(1,1)" onmouseup="stopJog()" onmouseleave="stopJog()">+</button>
+                <div id="lbl-2" class="axis-label">J3</div>
+                <button class="jog-btn" onmousedown="startJog(2,-1)" onmouseup="stopJog()" onmouseleave="stopJog()">-</button>
+                <button class="jog-btn" onmousedown="startJog(2,1)" onmouseup="stopJog()" onmouseleave="stopJog()">+</button>
+                <div id="lbl-3" class="axis-label">J4</div>
+                <button class="jog-btn" onmousedown="startJog(3,-1)" onmouseup="stopJog()" onmouseleave="stopJog()">-</button>
+                <button class="jog-btn" onmousedown="startJog(3,1)" onmouseup="stopJog()" onmouseleave="stopJog()">+</button>
+                <div id="lbl-4" class="axis-label">J5</div>
+                <button class="jog-btn" onmousedown="startJog(4,-1)" onmouseup="stopJog()" onmouseleave="stopJog()">-</button>
+                <button class="jog-btn" onmousedown="startJog(4,1)" onmouseup="stopJog()" onmouseleave="stopJog()">+</button>
+                <div id="lbl-5" class="axis-label">J6</div>
+                <button class="jog-btn" onmousedown="startJog(5,-1)" onmouseup="stopJog()" onmouseleave="stopJog()">-</button>
+                <button class="jog-btn" onmousedown="startJog(5,1)" onmouseup="stopJog()" onmouseleave="stopJog()">+</button>
+            </div>
+
+            <div class="speed-box">
+                <span class="speed-label">JOG速度:</span>
+                <input type="range" id="speed-slider" min="1" max="50" value="10" title="调整运动速度">
+                <span id="speed-val" style="font-size:12px; width:30px; text-align:right;">10%</span>
+            </div>
+
+            <button id="btn-run" class="btn-run" onclick="runDemo()">▶ 运行测试程序</button>
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <script>
+        // ==========================================
+        // 核心变量与状态
+        // ==========================================
+        let scene, camera, renderer, controls;
+        let joints = []; 
+        let isFaulty = false; 
+        let jogInterval = null;
+        let currentStep = 1; 
+
+        const axes = ['y', 'x', 'x', 'z', 'x', 'z']; 
+        const limits = [[-2.8,2.8], [-1.5,1.5], [-2.5,2.5], [-3.4,3.4], [-2.0,2.0], [-6.0,6.0]];
+        const ALIGN_THRESHOLD = 0.1; 
+
+        // 页面加载后初始化
+        setTimeout(() => {
+            init3D();
+            initPython();
+        }, 500);
+
+        function updateScreen(msg) {
+            const s = document.getElementById('screen');
+            s.innerText += "\n> " + msg;
+            s.scrollTop = s.scrollHeight;
+        }
+
+        function setStep(n) {
+            currentStep = n;
+            for(let i=1; i<=5; i++) {
+                const el = document.getElementById('step'+i);
+                if(el) {
+                    el.className = '';
+                    if(i < n) el.className = 'step-done';
+                    if(i === n) el.className = 'step-active';
+                }
+            }
+        }
+
+        // ==========================================
+        // 供 Python 调用的 JS 接口
+        // ==========================================
+        
+        window.py_get_pulse = function(axis) {
+            if(!isFaulty) return 0;
+            let idx = axis - 1;
+            let rad = joints[idx].rotation[axes[idx]];
+            let deg = rad * 180 / Math.PI;
+            return Math.round(deg * 1000); 
+        };
+
+        window.py_set_joint_angle = function(axis, deg) {
+            let idx = axis - 1;
+            let rad = deg * Math.PI / 180;
+            joints[idx].rotation[axes[idx]] += rad; 
+            checkAlignment(); 
+        };
+
+        window.py_print = function(msg) {
+            const pyConsole = document.getElementById('py-console');
+            pyConsole.innerText += msg + "\n";
+            pyConsole.scrollTop = pyConsole.scrollHeight;
+            updateScreen("PY: " + msg); 
+        };
+
+        window.py_calibrate = function() {
+            attemptMastering();
+        };
+
+        // ==========================================
+        // 机器人控制逻辑 (故障、手动、标定)
+        // ==========================================
+        
+        function triggerFault() {
+            if(isFaulty) return;
+            isFaulty = true;
+            document.getElementById('alarm-banner').style.display = 'block';
+            document.getElementById('btn-fault').style.display = 'none';
+            document.getElementById('btn-fix').style.display = 'block';
+            document.getElementById('btn-run').disabled = true;
+            
+            joints.forEach((j, i) => {
+                const axis = axes[i];
+                const offset = (Math.random() > 0.5 ? 1 : -1) * (0.3 + Math.random()*0.3);
+                j.rotation[axis] += offset;
+            });
+
+            updateScreen("检测到脉冲计数器异常!");
+            updateScreen("报警: SRVO-062 BZAL");
+            updateScreen("提示: 请使用右侧按钮手动 JOG，或使用 Python 编写自动化修正算法。");
+            setStep(3);
+        }
+
+        function startJog(idx, dir) {
+            if(jogInterval) clearInterval(jogInterval);
+            const speedSlider = document.getElementById('speed-slider');
+            jogInterval = setInterval(() => {
+                const j = joints[idx];
+                const axis = axes[idx];
+                const speed = 0.005 * (parseInt(speedSlider.value) / 10); 
+                let val = j.rotation[axis] + dir * speed;
+                if(val >= limits[idx][0] && val <= limits[idx][1]) {
+                    j.rotation[axis] = val;
+                }
+            }, 20);
+        }
+
+        function stopJog() { clearInterval(jogInterval); }
+
+        function checkAlignment() {
+            if(!isFaulty) {
+                for(let i=0; i<6; i++) {
+                    const el = document.getElementById('lbl-'+i);
+                    if(el) el.classList.add('aligned');
+                }
+                return true;
+            }
+            let allAligned = true;
+            for(let i=0; i<6; i++) {
+                const axis = axes[i];
+                const val = joints[i].rotation[axis];
+                const el = document.getElementById('lbl-'+i);
+                if(Math.abs(val) < ALIGN_THRESHOLD) {
+                    el.classList.add('aligned'); 
+                } else {
+                    el.classList.remove('aligned'); 
+                    allAligned = false;
+                }
+            }
+            return allAligned;
+        }
+
+        function attemptMastering() {
+            if(!isFaulty) return;
+            const isOk = checkAlignment();
+            if(isOk) {
+                updateScreen("正在写入零点配置...");
+                setTimeout(() => {
+                    joints.forEach((j,i) => j.rotation[axes[i]] = 0); 
+                    isFaulty = false;
+                    document.getElementById('alarm-banner').style.display = 'none';
+                    document.getElementById('btn-fault').style.display = 'block';
+                    document.getElementById('btn-fix').style.display = 'none';
+                    document.getElementById('btn-run').disabled = false;
+                    updateScreen("标定成功 (Zero Position Mastered).");
+                    setStep(5);
+                }, 1000);
+            } else {
+                updateScreen("错误: 红白标线未对齐，无法标定!");
+                window.py_print("❌ 标定被拒绝：物理轴误差过大。请确保补偿角度计算正确。");
+            }
+        }
+
+        function runDemo() {
+            if(isFaulty) {
+                updateScreen("故障状态禁止运行!");
+                return;
+            }
+            updateScreen("开始运行测试程序...");
+            let t = 0;
+            const timer = setInterval(() => {
+                t += 0.05;
+                joints[0].rotation.y = Math.sin(t) * 0.5; 
+                joints[1].rotation.x = Math.sin(t*2) * 0.3; 
+                joints[2].rotation.x = Math.cos(t*2) * 0.3; 
+                joints[5].rotation.z += 0.1; 
+                if(t > 6.28) { 
+                    clearInterval(timer);
+                    joints.forEach((j,i) => j.rotation[axes[i]] = 0);
+                    updateScreen("程序运行结束.");
+                    setStep(1); 
+                }
+            }, 20);
+        }
+
+        // ==========================================
+        // Pyodide Python 环境初始化
+        // ==========================================
+        let pyodide;
+        async function initPython() {
+            const consoleEl = document.getElementById('py-console');
+            try {
+                if (typeof loadPyodide === 'undefined') throw new Error("外部 Python 引擎加载失败。");
+                while (!window.pyodide) await new Promise(r=>setTimeout(r,50));
+                pyodide = window.pyodide;
+                
+                await pyodide.runPythonAsync(`
+                    import js
+                    class RobotController:
+                        def get_pulse(self, axis):
+                            return js.py_get_pulse(axis)
+                        def set_joint_angle(self, axis, deg):
+                            js.py_set_joint_angle(axis, deg)
+                        def calibrate_zero(self):
+                            js.py_calibrate()
+                    
+                    robot = RobotController()
+                `);
+                
+                consoleEl.innerText = "✅ Python 教学环境就绪！";
+                document.getElementById('env-status').innerText = "✔️ 环境就绪";
+                document.getElementById('env-status').style.color = "#4caf50";
+                document.getElementById('py-code').disabled = false;
+                document.getElementById('btn-run-py').disabled = false;
+            } catch (err) {
+                consoleEl.innerText = "❌ Python 初始化失败: " + err;
+            }
+        }
+
+        async function runPythonCode() {
+            if(!isFaulty) {
+                window.py_print("ℹ️ 当前设备状态正常，无需执行标定算法。请先点击右侧【模拟电池故障】。");
+                return;
+            }
+            const code = document.getElementById('py-code').value;
+            document.getElementById('py-console').innerText = ""; 
+            window.py_print("开始编译执行算法...");
+            try {
+                pyodide.setStdout({ batched: (str) => window.py_print(str) });
+                await pyodide.runPythonAsync(code);
+                setStep(4);
+            } catch (err) {
+                window.py_print("🐍 语法或运算错误:\n" + err);
+            }
+        }
+
+        // ==========================================
+        // 程序化纹理与环境贴图（PBR 外观升级用，仅影响外观）
+        // ==========================================
+        function createBrushedMetalTex(hex) {
+            const c = document.createElement('canvas');
+            c.width = 256; c.height = 256;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = hex;
+            ctx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 600; i++) {
+                const y = Math.random() * 256;
+                ctx.strokeStyle = `rgba(255,255,255,${Math.random() * 0.12})`;
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+            }
+            for (let i = 0; i < 300; i++) {
+                const y = Math.random() * 256;
+                ctx.strokeStyle = `rgba(0,0,0,${Math.random() * 0.08})`;
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+            }
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            return tex;
+        }
+        function createEnvTexture() {
+            const c = document.createElement('canvas');
+            c.width = 512; c.height = 256;
+            const ctx = c.getContext('2d');
+            const grad = ctx.createLinearGradient(0, 0, 0, 256);
+            grad.addColorStop(0, '#667788');
+            grad.addColorStop(0.4, '#556677');
+            grad.addColorStop(0.5, '#445566');
+            grad.addColorStop(1, '#2a3848');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 512, 256);
+            ctx.fillStyle = 'rgba(255,250,230,0.4)';
+            ctx.beginPath(); ctx.arc(80, 50, 60, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'rgba(200,220,255,0.25)';
+            ctx.beginPath(); ctx.arc(380, 70, 45, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.beginPath(); ctx.arc(250, 40, 30, 0, Math.PI*2); ctx.fill();
+            const tex = new THREE.CanvasTexture(c);
+            tex.mapping = THREE.EquirectangularReflectionMapping;
+            return tex;
+        }
+
+        // ==========================================
+        // Three.js 3D 场景与模型搭建
+        // ==========================================
+        function init3D() {
+            try {
+                const container = document.getElementById('canvas-container');
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x2a2a2a);
+                scene.add(new THREE.GridHelper(10, 10, 0x666666, 0x333333));
+
+                camera = new THREE.PerspectiveCamera(45, container.offsetWidth/container.offsetHeight, 0.1, 100);
+                camera.position.set(2.0, 2.0, 3.0); camera.lookAt(0, 0.8, 0);
+
+                renderer = new THREE.WebGLRenderer({antialias: true});
+                renderer.setSize(container.offsetWidth, container.offsetHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.outputEncoding = THREE.sRGBEncoding;
+                renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                renderer.toneMappingExposure = 1.0;
+                renderer.physicallyCorrectLights = true;
+                container.appendChild(renderer.domElement);
+
+                // === 环境贴图（PBR 金属反射用） ===
+                const envTex = createEnvTexture();
+                const pmrem = new THREE.PMREMGenerator(renderer);
+                pmrem.compileEquirectangularShader();
+                scene.environment = pmrem.fromEquirectangular(envTex).texture;
+
+                // === 灯光系统（半球光+主光+补光+轮廓光） ===
+                scene.add(new THREE.HemisphereLight(0x88aacc, 0x3a3a3a, 0.45));
+                const dl = new THREE.DirectionalLight(0xffffff, 1.2);
+                dl.position.set(5, 10, 8);
+                dl.castShadow = true;
+                dl.shadow.mapSize.width = 2048;
+                dl.shadow.mapSize.height = 2048;
+                dl.shadow.camera.near = 1;
+                dl.shadow.camera.far = 30;
+                dl.shadow.camera.left = -5;
+                dl.shadow.camera.right = 5;
+                dl.shadow.camera.top = 5;
+                dl.shadow.camera.bottom = -5;
+                dl.shadow.bias = -0.0005;
+                scene.add(dl);
+                const fillLight = new THREE.DirectionalLight(0xaaccff, 0.35);
+                fillLight.position.set(-6, 6, -4);
+                scene.add(fillLight);
+                const rimLight = new THREE.DirectionalLight(0xffddaa, 0.3);
+                rimLight.position.set(-4, 4, -8);
+                scene.add(rimLight);
+
+                // 挂载修复后的 OrbitControls
+                if(THREE.OrbitControls) {
+                    controls = new THREE.OrbitControls(camera, renderer.domElement);
+                    controls.target.set(0, 0.8, 0);
+                    controls.enableDamping = true;
+                }
+
+                buildRobot();
+                // 为整机开启投影（仅外观，不影响逻辑）
+                scene.traverse(function(obj) {
+                    if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
+                });
+                
+                document.getElementById('speed-slider').oninput = function() {
+                    document.getElementById('speed-val').innerText = this.value + "%";
+                };
+
+                const animate = function() {
+                    requestAnimationFrame(animate);
+                    checkAlignment();
+                    if(controls) controls.update();
+                    renderer.render(scene, camera);
+                };
+                animate();
+            } catch(e) {
+                alert("3D模型加载异常: " + e);
+            }
+        }
+
+        function buildRobot() {
+            // ==========================================
+            // 工业精细版 6 轴机器人（【7】同款风格）
+            // 仅重构外观：关节层级 / 旋转轴 / 标定点位与原版完全一致
+            // ==========================================
+            const brushedYellowTex = createBrushedMetalTex('#e89500');
+            const brushedAluTex = createBrushedMetalTex('#b8bcc0');
+            const matYellow  = new THREE.MeshStandardMaterial({ color: 0xe89500, metalness: 0.5, roughness: 0.35, map: brushedYellowTex });
+            const matDark    = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.4 });
+            const matHousing = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, metalness: 0.5, roughness: 0.5 });
+            const matAlu     = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.9, roughness: 0.25, map: brushedAluTex });
+            const matPlastic = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.2, roughness: 0.7 });
+            const matMarkFix = new THREE.MeshBasicMaterial({color: 0xffffff});
+            const matMarkMov = new THREE.MeshBasicMaterial({color: 0xff0000});
+
+            function addMark(parent, isMov, pos, rot) {
+                const geo = new THREE.BoxGeometry(0.015, 0.004, 0.065);
+                const m = new THREE.Mesh(geo, isMov ? matMarkMov : matMarkFix);
+                m.position.copy(pos);
+                if(rot) m.rotation.set(rot.x, rot.y, rot.z);
+                parent.add(m);
+            }
+            function addBolt(parent, x, y, z, r, rotAxis) {
+                const bolt = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.035, 6), matAlu);
+                if (rotAxis === 'x') bolt.rotation.z = Math.PI / 2;
+                else if (rotAxis === 'z') bolt.rotation.x = Math.PI / 2;
+                bolt.position.set(x, y, z);
+                parent.add(bolt);
+            }
+            function addBoltRing(parent, count, radius, y, r) {
+                for (let i = 0; i < count; i++) {
+                    const ang = (i / count) * Math.PI * 2;
+                    addBolt(parent, Math.cos(ang) * radius, y, Math.sin(ang) * radius, r, 'y');
+                }
+            }
+            // 沿 X 轴的关节壳体（轴承环 + 端盖 + 螺栓环）
+            function xAxisJoint(parent, R, L) {
+                const jh = new THREE.Mesh(new THREE.CylinderGeometry(R, R, L, 24), matHousing);
+                jh.rotation.z = Math.PI / 2; parent.add(jh);
+                const ringA = new THREE.Mesh(new THREE.TorusGeometry(R * 0.88, 0.016, 8, 24), matAlu);
+                ringA.rotation.y = Math.PI / 2; ringA.position.x = L * 0.38; parent.add(ringA);
+                const ringB = ringA.clone(); ringB.position.x = -L * 0.38; parent.add(ringB);
+                const capR = R * 0.55;
+                const capA = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), matDark);
+                capA.rotation.z = Math.PI / 2; capA.position.x = L / 2; parent.add(capA);
+                addBolt(parent, L / 2 + 0.012, 0, 0, 0.02, 'x');
+                const capB = capA.clone(); capB.position.x = -L / 2; parent.add(capB);
+                addBolt(parent, -L / 2 - 0.012, 0, 0, 0.02, 'x');
+                for (let i = 0; i < 6; i++) {
+                    const ba = (i / 6) * Math.PI * 2;
+                    addBolt(parent, L / 2, Math.cos(ba) * R * 0.72, Math.sin(ba) * R * 0.72, 0.012, 'x');
+                }
+            }
+
+            // ============ 固定基座 ============
+            const base = new THREE.Group();
+            const basePlate = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.28, 0.05, 32), matDark);
+            basePlate.position.y = 0.025; base.add(basePlate);
+            addBoltRing(base, 8, 0.235, 0.03, 0.013);
+            const baseHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.195, 0.235, 0.14, 32), matHousing);
+            baseHousing.position.y = 0.115; base.add(baseHousing);
+            for (let f = 0; f < 8; f++) {
+                const fa = (f / 8) * Math.PI * 2 + Math.PI / 8;
+                const fin = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.1, 0.045), matHousing);
+                fin.position.set(Math.cos(fa) * 0.23, 0.115, Math.sin(fa) * 0.23);
+                fin.rotation.y = -fa; base.add(fin);
+            }
+            const baseRing = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.016, 8, 32), matAlu);
+            baseRing.rotation.x = Math.PI / 2; baseRing.position.y = 0.185; base.add(baseRing);
+            scene.add(base);
+
+            // ============ J1 回转腰座（Y 轴） ============
+            const j1 = new THREE.Group(); base.add(j1);
+            const turntable = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.195, 0.10, 32), matYellow);
+            turntable.position.y = 0.245; j1.add(turntable);
+            const waist = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.175, 0.24, 32), matYellow);
+            waist.position.y = 0.40; j1.add(waist);
+            const waistBand = new THREE.Mesh(new THREE.CylinderGeometry(0.178, 0.178, 0.06, 32), matDark);
+            waistBand.position.y = 0.40; j1.add(waistBand);
+            const waistCapT = new THREE.Mesh(new THREE.CylinderGeometry(0.160, 0.160, 0.035, 32), matHousing);
+            waistCapT.position.y = 0.46; j1.add(waistCapT);
+            const waistCapB = new THREE.Mesh(new THREE.CylinderGeometry(0.160, 0.160, 0.035, 32), matHousing);
+            waistCapB.position.y = 0.32; j1.add(waistCapB);
+            addMark(base, false, new THREE.Vector3(0.223, 0.12, 0));
+            addMark(j1, true, new THREE.Vector3(0.223, 0.12, 0));
+
+            // ============ J2 肩关节（X 轴）/ 大臂前倾约17°（工业机初始姿态） ============
+            const j2 = new THREE.Group(); j2.position.set(0, 0.50, 0); j1.add(j2);
+            xAxisJoint(j2, 0.19, 0.40);
+            const arm2 = new THREE.Group(); arm2.rotation.x = 0.30; j2.add(arm2);
+            const upperArm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.75, 0.22), matYellow);
+            upperArm.position.y = 0.375; arm2.add(upperArm);
+            const armGroove = new THREE.Mesh(new THREE.BoxGeometry(0.232, 0.50, 0.06), matDark);
+            armGroove.position.y = 0.375; arm2.add(armGroove);
+            const armCapT = new THREE.Mesh(new THREE.BoxGeometry(0.236, 0.04, 0.08), matHousing);
+            armCapT.position.y = 0.62; arm2.add(armCapT);
+            const armCapB = new THREE.Mesh(new THREE.BoxGeometry(0.236, 0.04, 0.08), matHousing);
+            armCapB.position.y = 0.22; arm2.add(armCapB);
+            addMark(j1, false, new THREE.Vector3(0.10, 0.50, 0.195), {x:Math.PI/2,y:0,z:0});
+            addMark(j2, true, new THREE.Vector3(0.10, 0, 0.195), {x:Math.PI/2,y:0,z:0});
+
+            // ============ J3 肘关节（X 轴）/ 小臂保持水平（初始姿态） ============
+            const j3 = new THREE.Group(); j3.position.set(0, 0.75, 0); arm2.add(j3);
+            xAxisJoint(j3, 0.15, 0.32);
+            const arm3 = new THREE.Group(); arm3.rotation.x = -0.30; j3.add(arm3);
+            const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.55), matYellow);
+            forearm.position.z = 0.31; arm3.add(forearm);
+            const fgroove = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.192, 0.48), matDark);
+            fgroove.position.z = 0.31; arm3.add(fgroove);
+            const fcapA = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.196, 0.04), matHousing);
+            fcapA.position.z = 0.07; arm3.add(fcapA);
+            const fcapB = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.196, 0.04), matHousing);
+            fcapB.position.z = 0.55; arm3.add(fcapB);
+            // J3 标记：贴在肘关节壳体表面 45° 方向，红白成对
+            addMark(arm2, false, new THREE.Vector3(0.11, 0.86, 0.11), {x:Math.PI/4,y:0,z:0});
+            addMark(j3, true, new THREE.Vector3(0.11, 0.11, 0.11), {x:Math.PI/4,y:0,z:0});
+
+            // ============ J4 腕回转（Z 轴） ============
+            const j4 = new THREE.Group(); j4.position.set(0, 0, 0.60); arm3.add(j4);
+            const j4Hub = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.10, 0.16, 24), matHousing);
+            j4Hub.rotation.x = Math.PI / 2; j4Hub.position.z = 0.02; j4.add(j4Hub);
+            const j4Ring = new THREE.Mesh(new THREE.TorusGeometry(0.086, 0.013, 8, 24), matAlu);
+            j4Ring.position.z = 0.10; j4.add(j4Ring);
+            const wristArm = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.07, 0.36, 20), matYellow);
+            wristArm.rotation.x = Math.PI / 2; wristArm.position.z = 0.30; j4.add(wristArm);
+            // J4 标记：零位时红白重合于 J4 轮毂顶面
+            addMark(arm3, false, new THREE.Vector3(0, 0.102, 0.62), {x:0, y:Math.PI/2, z:0});
+            addMark(j4, true, new THREE.Vector3(0, 0.102, 0.02), {x:0, y:Math.PI/2, z:0});
+
+            // ============ J5 腕俯仰（X 轴） ============
+            const j5 = new THREE.Group(); j5.position.set(0, 0, 0.50); j4.add(j5);
+            xAxisJoint(j5, 0.09, 0.22);
+            // J5 标记：零位时红白重合于 J5 关节壳体顶面
+            addMark(j4, false, new THREE.Vector3(0, 0.0925, 0.50));
+            addMark(j5, true, new THREE.Vector3(0, 0.0925, 0));
+
+            // ============ J6 法兰（Z 轴）/ 腕部前倾下折，法兰朝下偏前（工业机初始姿态） ============
+            const arm5 = new THREE.Group(); arm5.rotation.x = Math.PI / 2 - 0.30; j5.add(arm5);
+            const wristDrop = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.14, 20), matYellow);
+            wristDrop.rotation.x = Math.PI / 2; wristDrop.position.z = 0.09; arm5.add(wristDrop);
+            const j6 = new THREE.Group(); j6.position.set(0, 0, 0.16); arm5.add(j6);
+            const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.05, 24), matAlu);
+            flange.rotation.x = Math.PI / 2; flange.position.z = 0.01; j6.add(flange);
+            for (let i = 0; i < 6; i++) {
+                const a = (i / 6) * Math.PI * 2;
+                addBolt(j6, Math.cos(a) * 0.055, Math.sin(a) * 0.055, 0.04, 0.009, 'z');
+            }
+            // J6 标记：零位时红白重合于法兰外圆侧面
+            addMark(arm5, false, new THREE.Vector3(0, 0.087, 0.17), {x:0, y:Math.PI/2, z:0});
+            addMark(j6, true, new THREE.Vector3(0, 0.087, 0.01), {x:0, y:Math.PI/2, z:0});
+
+            joints = [j1, j2, j3, j4, j5, j6];
+        }
+
+        window.addEventListener('resize', () => {
+            const c = document.getElementById('canvas-container');
+            if(camera && renderer) {
+                camera.aspect = c.offsetWidth / c.offsetHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(c.offsetWidth, c.offsetHeight);
+            }
+        });
+    </script>
+</body>
+</html>

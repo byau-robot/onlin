@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>六轴装配机器人控制编程</title>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <style>
+        body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; font-family: "Microsoft YaHei", sans-serif; overflow: hidden; background: #222; }
+        
+        #header {
+            height: 48px; background: #1a1a1a; color: #fff;
+            display: flex; align-items: center; justify-content: space-between; padding: 0 15px;
+            border-bottom: 1px solid #333; box-shadow: 0 2px 10px rgba(0,0,0,0.5); z-index: 50;
+        }
+        
+        .btn-group button {
+            padding: 6px 14px; margin-left: 8px; border: none; border-radius: 4px; 
+            cursor: pointer; font-weight: bold; font-size: 13px; transition: 0.2s;
+            display: inline-flex; align-items: center; gap: 5px;
+        }
+        .btn-run { background: #28a745; color: white; }
+        .btn-run:hover { background: #218838; }
+        .btn-stop { background: #dc3545; color: white; }
+        .btn-reset { background: #6c757d; color: white; }
+
+        #main { display: flex; flex: 1; height: calc(100vh - 48px); }
+
+        /* 左侧工作区：仅包含代码编辑器 */
+        #leftPanels { width: 38%; min-width: 420px; height: 100%; border-right: 1px solid #333; background: #1e1e1e; display: flex; flex-direction: column; }
+
+        .panel-title { background: #2d2d2d; color: #aaa; font-size: 12px; padding: 6px 12px; font-weight: bold; text-transform: uppercase; border-bottom: 1px solid #3c3c3c; letter-spacing: 0.5px; }
+
+        #pythonCode {
+            flex: 1; width: 100%; box-sizing: border-box; background: #1e1e1e; color: #d4d4d4;
+            font-family: Consolas, monospace; font-size: 13.5px; padding: 15px; border: none; resize: none; outline: none; line-height: 1.6;
+        }
+
+        /* 右侧仿真区 */
+        #simDiv { flex: 1; height: 100%; position: relative; background: #2b2b2b; overflow: hidden; }
+        
+        #hud {
+            position: absolute; top: 15px; right: 15px;
+            background: rgba(0,0,0,0.7); color: #00ffcc;
+            padding: 10px 15px; border-radius: 4px; pointer-events: none;
+            font-family: monospace; font-size: 14px; border: 1px solid #444;
+            display: flex; flex-direction: column; gap: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="header">
+        <div style="font-size: 16px; font-weight: bold; letter-spacing: 1px; color: #ddd;">
+            🏭 六轴装配机器人控制编程
+        </div>
+        <div class="btn-group">
+            <button class="btn-run" onclick="runProgram()">▶ 运行 Python 脚本</button>
+            <button class="btn-stop" onclick="stopProgram()">🛑 停止</button>
+            <button class="btn-reset" onclick="resetScene()">↺ 复位场景</button>
+        </div>
+    </div>
+
+    <div id="main">
+        <div id="leftPanels">
+            <div class="panel-title">📝 Python 代码编辑器</div>
+<textarea id="pythonCode" spellcheck="false">
+# =======================================================
+# 工业机器人装配任务：纯运动控制脚本
+# =======================================================
+#
+# 工位坐标说明（单位：米，机器人坐标系，Y 向上为正）
+# --------------------------------------------------
+# 机器人初始位置: (x=0,  z=-2)         初始朝向: 面向 +Z 方向（面向零件库 A）
+# 零件库 A 中心:  (x=-2.2, z=2.2)       待抓取圆柱工件
+# 装配台 B 中心:  (x=2.2,  z=2.2)       用于放置工件的基座
+#
+# 运动函数说明:
+#   robot.move_car("FWD", d)    : 沿当前朝向前进 d 米
+#   robot.move_car("BWD", d)    : 沿当前朝向后退 d 米
+#   robot.rotate_car("LEFT",  a): 左转 a 度（绕 Y 轴正方向）
+#   robot.rotate_car("RIGHT", a): 右转 a 度（绕 Y 轴负方向）
+#   robot.move_arm(joint_id, deg): 控制第 joint_id 根关节转动到 deg 度
+#       关节编号:
+#         0 = J1 底座旋转  (绕 Y 轴)
+#         1 = J2 肩部大臂  (绕 X 轴) —— 控制大臂的抬放
+#         2 = J3 肘部前臂  (绕 X 轴) —— 控制前臂的伸缩
+#         3 = J4 腕部旋转  (绕 Y 轴)
+#         4 = J5 腕部俯仰  (绕 X 轴) —— 控制末端朝向
+#         5 = J6 法兰旋转  (绕 Y 轴)
+#   robot.gripper("CLOSE"): 夹爪闭合（抓取）
+#   robot.gripper("OPEN") : 夹爪张开（释放）
+# =======================================================
+
+# ---- 阶段 1：底盘导航，从起点驶向零件库 A ----
+# 当前位于 (x=0, z=-2)，面向 +Z 方向（向零件库 A 方向看）
+# 右转 90 度：调整朝向，使车体正对零件库 A 方向
+robot.rotate_car("RIGHT", 90)
+# 前进 2.2 米：从起点移动到能与零件库 A 对齐的位置
+robot.move_car("FWD", 2.2)
+# 左转 90 度：调整朝向，使车体正对零件库 A
+robot.rotate_car("LEFT", 90)
+# 前进 1.2 米：驶入零件库 A 旁，使机械臂正好位于工件上方
+robot.move_car("FWD", 1.2)
+
+# ---- 阶段 2：机械臂下探、抓取、抬起 ----
+# J5（腕部俯仰）转到 90 度：使夹爪向下对准工件
+robot.move_arm(5, 90)
+# J4（腕部旋转）转到 60 度：调整夹爪左右姿态
+robot.move_arm(4, 60)
+# J2（肩部大臂）转到 45 度：大臂下降至工件高度
+robot.move_arm(1, 45)
+# 闭合夹爪，抓取圆柱形工件
+robot.gripper("CLOSE")
+# J2（肩部大臂）转到 10 度：微微抬起大臂，避免拖拽工件
+robot.move_arm(1, 10)
+
+# ---- 阶段 3：底盘导航，从零件库 A 驶向装配台 B ----
+# 后退 1.2 米：从零件库 A 旁驶出至中间通道
+robot.move_car("BWD", 1.2)
+# 左转 90 度：改变朝向，朝装配台 B 方向
+robot.rotate_car("LEFT", 90)
+# 前进 4.397 米：横穿通道，驶入装配台 B 区域
+robot.move_car("FWD", 4.397)
+# 右转 90 度：调整朝向，使车体正对装配台 B
+robot.rotate_car("RIGHT", 90)
+# 前进 0.655 米：微调，使机械臂正好位于装配基座上方
+robot.move_car("FWD", 0.655)
+
+# ---- 阶段 4：调整姿态、卸料组装 ----
+# J5（腕部俯仰）转到 0 度：把夹爪调整回水平方向
+robot.move_arm(5, 0)
+# J4（腕部旋转）转到 -40 度：旋转夹爪角度，准备对位插孔
+robot.move_arm(4, -40)
+# J3（肘部前臂）转到 80 度：调整前臂角度
+robot.move_arm(2, 80)
+# J2（肩部大臂）转到 50 度：将工件下压至基座中心孔
+robot.move_arm(1, 50)
+# 张开夹爪，将工件释放到装配基座上
+robot.gripper("OPEN")
+
+# ---- 阶段 5：撤离装配台 B，进入安全等待位置 ----
+# 后退 1.5 米：撤离装配台 B，任务结束
+robot.move_car("BWD", 1.5)
+</textarea>
+        </div>
+
+        <div id="simDiv">
+            <div id="hud">
+                <div>🔧 系统: <span id="sysState" style="color:white">待机</span></div>
+                <div>🖐️ 夹爪: <span id="gripState">张开</span></div>
+                <div>🎯 结果: <span id="targetState" style="color:#aaa">--</span></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    let isRunning = false, stopSignal = false;
+    const logDiv = document.createElement('div');   // 日志窗口已移除，保留兼容引用
+    const stateDiv = document.getElementById('sysState');
+    const targetStateDiv = document.getElementById('targetState');
+
+    function log(msg, color='#ccc') {
+        console.log(msg);
+        logDiv.innerHTML += `<div style="color:${color}">> ${msg}</div>`;
+        logDiv.scrollTop = logDiv.scrollHeight;
+    }
+    function checkStop() { if (stopSignal) throw new Error("用户强制停止指令"); }
+
+    // --- Three.js 初始化基础设施 ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x2b2b2b);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(-4, 5, 6);
+    camera.lookAt(0, 1, 1.5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    document.getElementById('simDiv').appendChild(renderer.domElement);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.physicallyCorrectLights = true;
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // === 环境贴图（PBR 金属反射用） ===
+    function createEnvTexture() {
+        const c = document.createElement('canvas');
+        c.width = 512; c.height = 256;
+        const ctx = c.getContext('2d');
+        const grad = ctx.createLinearGradient(0, 0, 0, 256);
+        grad.addColorStop(0, '#667788');
+        grad.addColorStop(0.4, '#556677');
+        grad.addColorStop(0.5, '#445566');
+        grad.addColorStop(1, '#2a3848');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 512, 256);
+        ctx.fillStyle = 'rgba(255,250,230,0.4)';
+        ctx.beginPath(); ctx.arc(80, 50, 60, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(200,220,255,0.25)';
+        ctx.beginPath(); ctx.arc(380, 70, 45, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+        ctx.beginPath(); ctx.arc(250, 40, 30, 0, Math.PI*2); ctx.fill();
+        const tex = new THREE.CanvasTexture(c);
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        return tex;
+    }
+    const envTex = createEnvTexture();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    scene.environment = pmrem.fromEquirectangular(envTex).texture;
+
+    // === 灯光系统 ===
+    const hemiLight = new THREE.HemisphereLight(0x88aacc, 0x3a3a3a, 0.45);
+    scene.add(hemiLight);
+
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.position.set(-10, 18, 8);
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 2048;
+    mainLight.shadow.mapSize.height = 2048;
+    mainLight.shadow.camera.near = 1;
+    mainLight.shadow.camera.far = 50;
+    mainLight.shadow.camera.left = -15;
+    mainLight.shadow.camera.right = 15;
+    mainLight.shadow.camera.top = 15;
+    mainLight.shadow.camera.bottom = -15;
+    mainLight.shadow.bias = -0.0005;
+    scene.add(mainLight);
+
+    const fillLight = new THREE.DirectionalLight(0xaaccff, 0.35);
+    fillLight.position.set(8, 10, -5);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffddaa, 0.3);
+    rimLight.position.set(5, 5, -12);
+    scene.add(rimLight);
+
+    // === 程序化纹理 ===
+    function createBrushedMetalTex(hex) {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 256;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = hex;
+        ctx.fillRect(0, 0, 256, 256);
+        for (let i = 0; i < 600; i++) {
+            const y = Math.random() * 256;
+            ctx.strokeStyle = `rgba(255,255,255,${Math.random() * 0.12})`;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+        }
+        for (let i = 0; i < 300; i++) {
+            const y = Math.random() * 256;
+            ctx.strokeStyle = `rgba(0,0,0,${Math.random() * 0.08})`;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    }
+    function createHazardTex() {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 64;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(0, 0, 256, 64);
+        ctx.fillStyle = '#ffcc00';
+        for (let i = -64; i < 320; i += 48) {
+            ctx.beginPath();
+            ctx.moveTo(i, 0); ctx.lineTo(i + 32, 0);
+            ctx.lineTo(i + 64, 64); ctx.lineTo(i + 32, 64);
+            ctx.closePath(); ctx.fill();
+        }
+        const tex = new THREE.CanvasTexture(c);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        return tex;
+    }
+    const brushedYellowTex = createBrushedMetalTex('#e89500');
+    const brushedGreyTex = createBrushedMetalTex('#888888');
+    const hazardTex = createHazardTex();
+
+    // === PBR 材质库 ===
+    const mats = {
+        floor: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.7 }),
+        table: new THREE.MeshStandardMaterial({ color: 0xe0e0e0 }),
+        part: new THREE.MeshStandardMaterial({ color: 0x3498db }),
+        base: new THREE.MeshStandardMaterial({ color: 0x555555 }),
+        darkMetal: new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.6 }),
+        armYellow: new THREE.MeshStandardMaterial({ color: 0xe89500, metalness: 0.5, roughness: 0.35, map: brushedYellowTex }),
+        darkStruct: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.4 }),
+        jointHousing: new THREE.MeshStandardMaterial({ color: 0x3a3a3a, metalness: 0.5, roughness: 0.5 }),
+        brushedAlu: new THREE.MeshStandardMaterial({ color: 0x999999, metalness: 0.9, roughness: 0.25, map: brushedGreyTex }),
+        blackPlastic: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.1, roughness: 0.65 }),
+        tireRubber: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.05, roughness: 0.85 }),
+        hubSilver: new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.2 }),
+        gripperPad: new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.05, roughness: 0.9 }),
+        hazard: new THREE.MeshStandardMaterial({ map: hazardTex, metalness: 0.3, roughness: 0.5 }),
+        indicator: new THREE.MeshStandardMaterial({ color: 0x00ff66, emissive: 0x00aa33, emissiveIntensity: 0.8, metalness: 0.2, roughness: 0.3 })
+    };
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), mats.floor);
+    floor.rotation.x = -Math.PI/2; floor.receiveShadow = true;
+    scene.add(floor);
+    scene.add(new THREE.GridHelper(40, 40, 0x444444, 0x222222));
+
+    // V型工作台布局
+    function createTable(x, z, label) {
+        const g = new THREE.Group();
+        g.position.set(x, 0, z);
+        const top = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.1, 1.4), mats.table);
+        top.position.y = 0.8; top.castShadow = true; top.receiveShadow = true;
+        g.add(top);
+        const legGeo = new THREE.BoxGeometry(0.1, 0.8, 0.1);
+        [[-0.6,-0.6], [0.6,-0.6], [-0.6,0.6], [0.6,0.6]].forEach(pos => {
+            const l = new THREE.Mesh(legGeo, mats.darkMetal);
+            l.position.set(pos[0], 0.4, pos[1]);
+            g.add(l);
+        });
+        const cvs = document.createElement('canvas'); const ctx=cvs.getContext('2d');
+        cvs.width=256; cvs.height=64; ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,256,64);
+        ctx.fillStyle='white'; ctx.font='bold 30px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(label, 128, 32);
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cvs)}));
+        sp.position.set(0, 1.6, 0); sp.scale.set(1.5, 0.375, 1);
+        g.add(sp);
+        scene.add(g);
+        return {x, z, y:0.85}; 
+    }
+    const tableA = createTable(-2.2, 2.2, "零件库 A");
+    const tableB = createTable(2.2, 2.2, "装配台 B");
+
+    // 工件与装配基座
+    const partGeo = new THREE.CylinderGeometry(0.06, 0.06, 0.35, 32);
+    const part = new THREE.Mesh(partGeo, mats.part);
+    part.castShadow = true;
+    scene.add(part);
+
+    const baseGroup = new THREE.Group();
+    baseGroup.position.set(tableB.x, tableB.y, tableB.z);
+    scene.add(baseGroup);
+    const baseMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.1, 32), mats.base);
+    baseMesh.position.y = 0.05; baseMesh.receiveShadow = true;
+    baseGroup.add(baseMesh);
+    const holeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.11, 32), new THREE.MeshBasicMaterial({color:0x000000}));
+    holeMesh.position.y = 0.051; 
+    baseGroup.add(holeMesh);
+
+    // 六轴移动机器人结构组装（工业精细版，关节层级与原版完全一致）
+    const robotData = { group: new THREE.Group(), joints: [], gripper: {root:null, isClosed:false} };
+    scene.add(robotData.group);
+
+    // --- 辅助函数：螺栓 ---
+    function addBolt(parent, x, y, z, r, rotAxis) {
+        const bolt = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.035, 6), mats.brushedAlu);
+        if (rotAxis === 'x') bolt.rotation.z = Math.PI / 2;
+        else if (rotAxis === 'z') bolt.rotation.x = Math.PI / 2;
+        bolt.position.set(x, y, z);
+        bolt.castShadow = true;
+        parent.add(bolt);
+    }
+    function addBoltRing(parent, count, radius, y, r) {
+        for (let i = 0; i < count; i++) {
+            const ang = (i / count) * Math.PI * 2;
+            addBolt(parent, Math.cos(ang) * radius, y, Math.sin(ang) * radius, r, 'y');
+        }
+    }
+
+    // --- AGV 底盘 ---
+    const chassis = new THREE.Group();
+    robotData.group.add(chassis);
+
+    const bodyMesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.45, 2.2), mats.armYellow);
+    bodyMesh.position.y = 0.5; bodyMesh.castShadow = true; bodyMesh.receiveShadow = true;
+    chassis.add(bodyMesh);
+
+    // 底裙边（深色）
+    const skirt = new THREE.Mesh(new THREE.BoxGeometry(1.66, 0.1, 2.26), mats.darkStruct);
+    skirt.position.y = 0.3; skirt.castShadow = true;
+    chassis.add(skirt);
+
+    // 顶盖面板
+    const topDeck = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.06, 2.1), mats.darkStruct);
+    topDeck.position.y = 0.74; topDeck.castShadow = true;
+    chassis.add(topDeck);
+
+    // 顶盖螺栓
+    addBolt(chassis, 0.62, 0.78, 0.95, 0.02, 'y'); addBolt(chassis, -0.62, 0.78, 0.95, 0.02, 'y');
+    addBolt(chassis, 0.62, 0.78, -0.95, 0.02, 'y'); addBolt(chassis, -0.62, 0.78, -0.95, 0.02, 'y');
+    addBolt(chassis, 0.62, 0.78, 0, 0.02, 'y'); addBolt(chassis, -0.62, 0.78, 0, 0.02, 'y');
+
+    // 侧面警示条纹
+    const stripeL = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 1.8), mats.hazard);
+    stripeL.position.set(0.81, 0.42, 0); chassis.add(stripeL);
+    const stripeR = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.14, 1.8), mats.hazard);
+    stripeR.position.set(-0.81, 0.42, 0); chassis.add(stripeR);
+
+    // 前部方向指示灯（发光）
+    const indicator = new THREE.Mesh(new THREE.SphereGeometry(0.055, 16, 16), mats.indicator);
+    indicator.position.set(0, 0.62, 1.12); chassis.add(indicator);
+
+    // 尾部控制盒（黑色工程塑料）
+    const ctrlBox = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.32), mats.blackPlastic);
+    ctrlBox.position.set(-0.42, 0.86, -0.7); ctrlBox.castShadow = true;
+    chassis.add(ctrlBox);
+    // 控制盒状态灯
+    const ctrlLed = new THREE.Mesh(new THREE.SphereGeometry(0.02, 8, 8), mats.indicator);
+    ctrlLed.position.set(-0.42, 0.95, -0.55); chassis.add(ctrlLed);
+
+    // 前后保险杠
+    const bumperF = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 0.08), mats.darkStruct);
+    bumperF.position.set(0, 0.32, 1.14); bumperF.castShadow = true;
+    chassis.add(bumperF);
+    const bumperB = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 0.08), mats.darkStruct);
+    bumperB.position.set(0, 0.32, -1.14); bumperB.castShadow = true;
+    chassis.add(bumperB);
+
+    // --- 车轮（带胎纹、轮毂、螺帽） ---
+    function addWheel(x, z) {
+        const wg = new THREE.Group();
+        const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.26, 32), mats.tireRubber);
+        tire.rotation.z = Math.PI / 2; tire.castShadow = true; wg.add(tire);
+        // 胎纹块
+        for (let t = 0; t < 12; t++) {
+            const tread = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.05, 0.05), mats.tireRubber);
+            const ang = (t / 12) * Math.PI * 2;
+            tread.position.set(0, Math.cos(ang) * 0.34, Math.sin(ang) * 0.34);
+            tread.rotation.x = ang;
+            wg.add(tread);
+        }
+        // 轮毂
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.19, 0.28, 24), mats.hubSilver);
+        hub.rotation.z = Math.PI / 2; hub.castShadow = true; wg.add(hub);
+        // 中心盖
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 16), mats.darkStruct);
+        cap.rotation.z = Math.PI / 2; wg.add(cap);
+        // 轮毂螺帽
+        for (let b = 0; b < 5; b++) {
+            const ba = (b / 5) * Math.PI * 2;
+            addBolt(wg, 0, Math.cos(ba) * 0.12, Math.sin(ba) * 0.12, 0.015, 'x');
+        }
+        wg.position.set(x, 0.35, z);
+        chassis.add(wg);
+    }
+    addWheel(0.9, 0.8); addWheel(-0.9, 0.8); addWheel(0.9, -0.8); addWheel(-0.9, -0.8);
+
+    // --- 机械臂底座（位置不可改动，运动控制依赖） ---
+    const armBase = new THREE.Group();
+    armBase.position.set(0, 0.75, 0.6);
+    chassis.add(armBase);
+
+    // 底座法兰盘
+    const basePlate = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.5, 0.07, 32), mats.darkStruct);
+    basePlate.position.y = 0.0; basePlate.castShadow = true; basePlate.receiveShadow = true;
+    armBase.add(basePlate);
+    addBoltRing(armBase, 8, 0.4, 0.02, 0.016);
+
+    // 底座旋转外壳（带散热筋）
+    const baseHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.4, 0.14, 32), mats.jointHousing);
+    baseHousing.position.y = 0.09; baseHousing.castShadow = true;
+    armBase.add(baseHousing);
+    for (let f = 0; f < 8; f++) {
+        const fa = (f / 8) * Math.PI * 2;
+        const fin = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.1, 0.06), mats.jointHousing);
+        fin.position.set(Math.cos(fa) * 0.39, 0.09, Math.sin(fa) * 0.39);
+        fin.rotation.y = -fa;
+        armBase.add(fin);
+    }
+    // 旋转轴承环
+    const baseRing = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.02, 8, 32), mats.brushedAlu);
+    baseRing.rotation.x = Math.PI / 2; baseRing.position.y = 0.02;
+    armBase.add(baseRing);
+
+    // --- 精细臂段构建（保持关节层级不变） ---
+    function createDetailedLink(w, h, d, yOff, axis, isArm) {
+        const g = new THREE.Group();
+
+        // 主臂体
+        const mainMat = isArm ? mats.armYellow : mats.darkStruct;
+        const mainBody = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mainMat);
+        mainBody.position.y = yOff; mainBody.castShadow = true; mainBody.receiveShadow = true;
+        g.add(mainBody);
+
+        // 臂体两侧凹槽装饰（深色）
+        if (h > 0.5) {
+            const groove = new THREE.Mesh(new THREE.BoxGeometry(w + 0.012, h * 0.72, d * 0.18), mats.darkStruct);
+            groove.position.y = yOff;
+            g.add(groove);
+            // 凹槽两端堵头
+            const capT = new THREE.Mesh(new THREE.BoxGeometry(w + 0.014, 0.04, d * 0.2), mats.jointHousing);
+            capT.position.y = yOff + h * 0.36; g.add(capT);
+            const capB = new THREE.Mesh(new THREE.BoxGeometry(w + 0.014, 0.04, d * 0.2), mats.jointHousing);
+            capB.position.y = yOff - h * 0.36; g.add(capB);
+        }
+
+        // 关节壳体
+        const jointR = Math.max(w, d) * 0.68;
+        const jh = new THREE.Mesh(new THREE.CylinderGeometry(jointR, jointR, w * 1.35, 24), mats.jointHousing);
+        if (axis === 'x') jh.rotation.z = Math.PI / 2;
+        jh.castShadow = true;
+        g.add(jh);
+
+        // 轴承环（银色）
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(jointR * 0.88, 0.016, 8, 24), mats.brushedAlu);
+        if (axis === 'x') ring.rotation.y = Math.PI / 2;
+        else ring.rotation.x = Math.PI / 2;
+        g.add(ring);
+
+        // 关节端盖 + 中心螺栓
+        const capR = jointR * 0.55;
+        if (axis === 'x') {
+            const capA = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), mats.darkStruct);
+            capA.rotation.z = Math.PI / 2; capA.position.x = w * 0.68; g.add(capA);
+            addBolt(g, w * 0.7, 0, 0, 0.02, 'x');
+            const capB2 = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), mats.darkStruct);
+            capB2.rotation.z = Math.PI / 2; capB2.position.x = -w * 0.68; g.add(capB2);
+            addBolt(g, -w * 0.7, 0, 0, 0.02, 'x');
+        } else {
+            const capA = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), mats.darkStruct);
+            capA.position.y = 0.02; g.add(capA);
+            addBolt(g, 0, 0.04, 0, 0.02, 'y');
+        }
+        // 螺栓环
+        if (axis === 'x') {
+            for (let i = 0; i < 6; i++) {
+                const ba = (i / 6) * Math.PI * 2;
+                addBolt(g, w * 0.68, Math.cos(ba) * jointR * 0.72, Math.sin(ba) * jointR * 0.72, 0.012, 'x');
+            }
+        }
+        return { group: g, mesh: mainBody };
+    }
+
+    // J1 - 底座旋转 (Y轴)
+    const j1 = new THREE.Group(); armBase.add(j1);
+    const l1 = createDetailedLink(0.6, 0.3, 0.6, 0.15, 'y', true);
+    j1.add(l1.group); robotData.joints.push({obj:j1, axis:'y'});
+
+    // J2 - 肩部 (X轴)
+    const j2 = new THREE.Group(); j2.position.y = 0.5; j1.add(j2);
+    const l2 = createDetailedLink(0.4, 1.4, 0.4, 0.7, 'x', true);
+    j2.add(l2.group); robotData.joints.push({obj:j2, axis:'x'});
+    // 上臂线缆导管
+    const cable2 = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 1.15, 8), mats.blackPlastic);
+    cable2.position.set(0.21, 0.7, 0); cable2.castShadow = true;
+    j2.add(cable2);
+    // 线缆卡扣
+    for (let k = 0; k < 3; k++) {
+        const clip = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.008, 6, 12), mats.darkStruct);
+        clip.rotation.y = Math.PI / 2; clip.position.set(0.21, 0.25 + k * 0.45, 0);
+        j2.add(clip);
+    }
+
+    // J3 - 肘部 (X轴)
+    const j3 = new THREE.Group(); j3.position.y = 1.4; j2.add(j3);
+    const l3 = createDetailedLink(0.35, 1.2, 0.35, 0.6, 'x', true);
+    j3.add(l3.group); robotData.joints.push({obj:j3, axis:'x'});
+    // 前臂线缆导管
+    const cable3 = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.95, 8), mats.blackPlastic);
+    cable3.position.set(0.185, 0.6, 0); cable3.castShadow = true;
+    j3.add(cable3);
+    for (let k = 0; k < 2; k++) {
+        const clip = new THREE.Mesh(new THREE.TorusGeometry(0.04, 0.007, 6, 12), mats.darkStruct);
+        clip.rotation.y = Math.PI / 2; clip.position.set(0.185, 0.25 + k * 0.45, 0);
+        j3.add(clip);
+    }
+
+    // J4 - 腕部旋转 (Y轴)
+    const j4 = new THREE.Group(); j4.position.y = 1.2; j3.add(j4);
+    const l4 = createDetailedLink(0.3, 0.3, 0.3, 0.15, 'y', false);
+    j4.add(l4.group); robotData.joints.push({obj:j4, axis:'y'});
+
+    // J5 - 腕部俯仰 (X轴)
+    const j5 = new THREE.Group(); j5.position.y = 0.3; j4.add(j5);
+    const l5 = createDetailedLink(0.25, 0.4, 0.25, 0.2, 'x', true);
+    j5.add(l5.group); robotData.joints.push({obj:j5, axis:'x'});
+
+    // J6 - 末端旋转 (Y轴)
+    const j6 = new THREE.Group(); j6.position.y = 0.4; j5.add(j6);
+    robotData.joints.push({obj:j6, axis:'y'});
+    // J6 法兰盘
+    const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.06, 24), mats.brushedAlu);
+    flange.position.y = 0.03; flange.castShadow = true;
+    j6.add(flange);
+    addBoltRing(j6, 6, 0.1, 0.07, 0.009);
+
+    // --- 夹爪（气动平行夹爪） ---
+    const gripRoot = new THREE.Group();
+    j6.add(gripRoot);
+    robotData.gripper.root = gripRoot;
+
+    // 气动缸体
+    const gripCyl = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.2, 24), mats.darkStruct);
+    gripCyl.rotation.x = Math.PI / 2; gripCyl.position.y = -0.04; gripCyl.castShadow = true;
+    gripRoot.add(gripCyl);
+    // 气管接头
+    const fitting = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.05, 8), mats.brushedAlu);
+    fitting.position.set(0.06, -0.13, 0); gripRoot.add(fitting);
+
+    // 夹爪安装板
+    const gripPlate = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.04, 0.16), mats.brushedAlu);
+    gripPlate.position.y = 0.05; gripPlate.castShadow = true;
+    gripRoot.add(gripPlate);
+
+    // 左手指（组，含指尖橡胶垫）
+    const fingerL = new THREE.Group();
+    const fbodyL = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.30, 0.12), mats.brushedAlu);
+    fbodyL.position.y = 0.20; fbodyL.castShadow = true; fingerL.add(fbodyL);
+    const fpadL = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.24, 0.10), mats.gripperPad);
+    fpadL.position.set(0.012, 0.20, 0); fingerL.add(fpadL);
+    // 指根加固块
+    const frootL = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.14), mats.darkStruct);
+    frootL.position.y = 0.05; fingerL.add(frootL);
+    fingerL.position.set(-0.18, 0.07, 0);
+    gripRoot.add(fingerL); robotData.gripper.left = fingerL;
+
+    // 右手指
+    const fingerR = new THREE.Group();
+    const fbodyR = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.30, 0.12), mats.brushedAlu);
+    fbodyR.position.y = 0.20; fbodyR.castShadow = true; fingerR.add(fbodyR);
+    const fpadR = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.24, 0.10), mats.gripperPad);
+    fpadR.position.set(-0.012, 0.20, 0); fingerR.add(fpadR);
+    const frootR = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 0.14), mats.darkStruct);
+    frootR.position.y = 0.05; fingerR.add(frootR);
+    fingerR.position.set(0.18, 0.07, 0);
+    gripRoot.add(fingerR); robotData.gripper.right = fingerR;
+
+    // 状态归位设置
+    function setInitState() {
+        robotData.group.position.set(0, 0, -2);
+        robotData.group.rotation.set(0, 0, 0);
+        
+        j1.rotation.y = 0;
+        j2.rotation.x = THREE.Math.degToRad(30);
+        j3.rotation.x = THREE.Math.degToRad(70);
+        j4.rotation.y = 0;
+        j5.rotation.x = THREE.Math.degToRad(80);
+        j6.rotation.y = 0;
+
+        scene.attach(part);
+        part.position.set(tableA.x, tableA.y + 0.175, tableA.z);
+        part.rotation.set(Math.PI/2, 0, Math.PI/2);
+        part.material.color.set(0x3498db);
+
+        robotData.gripper.isClosed = false;
+        updateGripper();
+
+        isRunning = false; stopSignal = false;
+        stateDiv.innerText = "待机"; stateDiv.style.color = "white";
+        targetStateDiv.innerText = "--"; targetStateDiv.style.color = "#aaa";
+    }
+    setInitState();
+
+    function updateGripper() {
+        // 夹爪间距：闭合时留出 0.09 米空隙（约 18cm），明显大于圆柱半径 0.06
+        //   保留被夹物品的原始宽度，从视觉上可清楚看到圆柱卡在夹爪之间
+        //   张开时扩大到 0.18 米，闭合/张开的开合动作明显
+        const gap = robotData.gripper.isClosed ? 0.09 : 0.18;
+        robotData.gripper.left.position.x = -gap;
+        robotData.gripper.right.position.x = gap;
+        document.getElementById('gripState').innerText = robotData.gripper.isClosed ? "🔴 闭合" : "🟢 张开";
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // --- 底层轴控物理库映射 ---
+    const cmd = {
+        moveCarDist: async (dir, dist) => {
+            checkStop();
+            log(`🚗 底盘动作: ${dir === 'FWD' ? '前进' : '后退'} ${dist} 米`);
+            const step = 0.05; let moved = 0;
+            const sign = (dir==='FWD') ? 1 : -1;
+            while(moved < dist) {
+                checkStop();
+                robotData.group.translateZ(sign * step);
+                moved += step;
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        rotateCar: async (dir, deg) => {
+            checkStop();
+            log(`🔄 底盘旋转: ${dir === 'LEFT' ? '左转' : '右转'} ${deg} 度`);
+            const rad = THREE.Math.degToRad(deg);
+            const step = 0.04; let moved = 0;
+            const sign = (dir==='LEFT') ? 1 : -1;
+            while(moved < rad) {
+                checkStop();
+                const d = Math.min(step, rad - moved);
+                robotData.group.rotation.y += sign * d;
+                moved += d;
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        moveArm: async (id, deg) => {
+            checkStop();
+            const jointsName = ["J1 基座","J2 大臂","J3 肘部","J4 臂旋","J5 腕摆","J6 法兰"];
+            log(`🦾 关节调位: [${jointsName[id]}] 转至 ${deg} 度`);
+            const j = robotData.joints[id];
+            const target = THREE.Math.degToRad(deg);
+            const start = j.obj.rotation[j.axis];
+            const diff = target - start;
+            for(let i=1; i<=40; i++) {
+                checkStop();
+                j.obj.rotation[j.axis] = start + diff * (i/40);
+                await new Promise(r => setTimeout(r, 16));
+            }
+        },
+        gripper: async (act) => {
+            checkStop();
+            log(`🖐️ 终端效应器: 执行 [${act === 'CLOSE' ? '夹紧抓取' : '张开松手'}]`);
+            const isClose = (act === 'CLOSE');
+            robotData.gripper.isClosed = isClose;
+            updateGripper();
+            
+            if(isClose) {
+                const gPos = new THREE.Vector3(); robotData.gripper.root.getWorldPosition(gPos);
+                const pPos = new THREE.Vector3(); part.getWorldPosition(pPos);
+                if(gPos.distanceTo(pPos) < 0.7) { 
+                    log("✅ 反馈: 成功抓取物料工件", "#0f0");
+                    robotData.gripper.root.attach(part);
+                } else {
+                    log("⚠️ 警告: 未触及边缘，抓取落空", "#fa0");
+                }
+            } else {
+                if(part.parent === robotData.gripper.root) {
+                    scene.attach(part);
+                    const partPos = part.position.clone();
+                    const basePos = baseGroup.position.clone();
+                    const dist = new THREE.Vector2(partPos.x, partPos.z).distanceTo(new THREE.Vector2(basePos.x, basePos.z));
+                    
+                    if(dist < 0.3) {
+                        log("🎉 工艺完成: 中心孔位精准对接！", "#0f0");
+                        targetStateDiv.innerText = "装配完成"; targetStateDiv.style.color = "#0f0";
+                        part.material.color.set(0x00ff00);
+                        part.position.set(basePos.x, basePos.y + 0.05 + 0.175, basePos.z);
+                        part.rotation.set(0,0,0);
+                    } else {
+                        log("❌ 异常中止: 轴心偏差过大", "#ff4444");
+                        targetStateDiv.innerText = "装配失败"; targetStateDiv.style.color = "#f00";
+                        part.material.color.set(0xff0000);
+                        if(part.position.y < tableB.y) part.position.y = tableB.y + 0.175;
+                    }
+                }
+            }
+            await new Promise(r=>setTimeout(r, 500));
+        }
+    };
+
+    // --- 多机制 Python 虚拟语法解释执行核心 ---
+    window.runProgram = async function() {
+        if(isRunning) return;
+        const code = document.getElementById('pythonCode').value;
+        if(!code.trim()) { alert("编辑器无可用控制流代码"); return; }
+        
+        isRunning = true; stopSignal = false;
+        stateDiv.innerText = "正在解析"; stateDiv.style.color = "#00ffcc";
+        log("-----------------------------------------", "#555");
+        log("🚀 开始编译并解析 Python 控制脚本...", "#00ffcc");
+
+        try {
+            const lines = code.split('\n');
+            for(let i=0; i<lines.length; i++) {
+                checkStop();
+                let line = lines[i].trim();
+
+                // 跳过完全空行和纯说明行
+                if(line === '' || (line.startsWith('#') && !line.includes('2.'))) continue;
+
+                // 【字符串处理核心机制 1】：格式化输出及清洗
+                if(line.startsWith('print(')) {
+                    let text = line.match(/print\((?:f?"|')(.*?)(?:"|')\)/);
+                    if(text) {
+                        let rawStr = text[1];
+                        // 翻译伪解析 f-string 和 字符串操作变量
+                        rawStr = rawStr.replace(/\{target_name\}/g, "零件库A");
+                        rawStr = rawStr.replace(/\{' -> '.join\(steps\)\}/g, "RIGHT_90 -> FWD_2.2 -> LEFT_90 -> FWD_1.2");
+                        rawStr = rawStr.replace(/\{clean_signal\}/g, "[target_aligned_success]");
+                        log(`🐍 [Python Print]: ${rawStr}`, "#aaffaa");
+                    }
+                    continue;
+                }
+
+                // 【工业底层驱动接口映射】
+                if(line.startsWith("robot.move_car")) {
+                    const args = line.match(/"([^"]+)",\s*([\d.]+)/);
+                    if(args) await cmd.moveCarDist(args[1], parseFloat(args[2]));
+                } else if(line.startsWith("robot.rotate_car")) {
+                    const args = line.match(/"([^"]+)",\s*([\d.]+)/);
+                    if(args) await cmd.rotateCar(args[1], parseFloat(args[2]));
+                } else if(line.startsWith("robot.move_arm")) {
+                    const args = line.match(/\((\d+),\s*(-?[\d.]+)\)/);
+                    if(args) await cmd.moveArm(parseInt(args[1]), parseFloat(args[2]));
+                } else if(line.startsWith("robot.gripper")) {
+                    const args = line.match(/"([^"]+)"/);
+                    if(args) await cmd.gripper(args[1]);
+                }
+            }
+            log("✅ 脚本中的所有运动学与数据流指令已安全闭环", "#0f0");
+        } catch (e) {
+            log(`🛑 执行受阻: ${e.message}`, "#f00");
+        } finally {
+            isRunning = false; stateDiv.innerText = "待机"; stateDiv.style.color = "white";
+        }
+    };
+    
+    window.stopProgram = function() { if(isRunning) stopSignal = true; };
+    window.resetScene = function() { if(isRunning) stopProgram(); setTimeout(setInitState, 100); };
+
+    window.addEventListener('resize', () => {
+        const d = document.getElementById('simDiv');
+        camera.aspect = d.clientWidth / d.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(d.clientWidth, d.clientHeight);
+    });
+    setTimeout(()=>window.dispatchEvent(new Event('resize')), 200);
+</script>
+</body>
+</html>

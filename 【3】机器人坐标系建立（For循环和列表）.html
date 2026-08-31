@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>工业机器人坐标系建立仿真 (Python PBL 版)</title>
+    <!-- 引入 Pyodide 运行环境 -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+    <script>
+    async function initPy(){
+      window.pyodide = await loadPyodide({
+        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/"
+      });
+    }
+    initPy();
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #222; display: flex; height: 100vh; font-family: "Microsoft YaHei", sans-serif; }
+        
+        /* 左侧：3D 视口 */
+        #canvas-container { flex: 1; position: relative; background: linear-gradient(to bottom, #3a3a3a, #1a1a1a); }
+        #overlay { position: absolute; top: 10px; left: 10px; pointer-events: none; user-select: none; }
+        .title { color: #FFD700; font-size: 20px; font-weight: bold; text-shadow: 1px 1px 2px black; margin: 0; }
+        .subtitle { color: #0f0; font-size: 12px; margin-top: 5px; font-weight: bold; }
+        
+        .task-box { 
+            background: rgba(0,0,0,0.7); border: 1px solid #666; border-radius: 5px; 
+            padding: 10px; margin-top: 10px; color: white; font-size: 13px; line-height: 1.6;
+            pointer-events: auto; width: 200px;
+        }
+        .step-row { display: flex; justify-content: space-between; margin-bottom: 2px; color: #ccc; font-size: 12px; }
+        
+        /* 中间：Python 编程面板 */
+        #python-panel {
+            width: 420px; background: #1e1e1e; border-left: 2px solid #444; border-right: 2px solid #444;
+            display: flex; flex-direction: column; padding: 12px; box-sizing: border-box; z-index: 10;
+        }
+        .py-header { color: #4fc1ff; font-size: 16px; font-weight: bold; margin-bottom: 10px; display: flex; justify-content: space-between;}
+        #env-status { font-size: 12px; color: #ffcc00; font-weight: normal; }
+        textarea { 
+            flex: 1; background: #2d2d2d; color: #9cdcfe; font-family: "Courier New", monospace; 
+            font-size: 14px; padding: 10px; border: 1px solid #3f3f3f; border-radius: 4px; resize: none; outline: none; 
+        }
+        .py-controls { margin-top: 10px; display: flex; gap: 10px; }
+        .btn-run-py { background: #0e639c; color: white; padding: 10px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; flex: 1; }
+        .btn-run-py:hover { background: #1177bb; }
+        .btn-run-py:disabled { background: #555; cursor: not-allowed; }
+        #py-console { 
+            height: 150px; margin-top: 10px; background: #000; font-family: monospace; 
+            font-size: 12px; padding: 8px; border-radius: 4px; overflow-y: auto; color: #d4d4d4; border: 1px solid #333; white-space: pre-wrap;
+        }
+
+        /* 右侧：示教器 */
+        #pendant { 
+            width: 253px; background: #cecece; 
+            display: flex; flex-direction: column; padding: 10px; box-sizing: border-box;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5); user-select: none;
+        }
+        
+        .screen-frame { background: #222; border-radius: 4px; padding: 8px; border: 2px solid #555; margin-bottom: 8px; position: relative; }
+        #screen { background: #000; height: 140px; color: #0f0; font-family: 'Consolas', monospace; font-size: 12px; overflow-y: auto; white-space: pre-wrap; padding: 5px; }
+        #status-bar { border-top: 1px solid #444; margin-top: 5px; padding-top: 2px; color: #0ff; font-size: 11px; display: flex; justify-content: space-between; }
+        
+        .mode-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+        .tab-btn { flex: 1; padding: 6px 0; background: #555; color: #aaa; border: 1px solid #444; cursor: pointer; font-weight: bold; border-radius: 4px; text-align: center; font-size: 11px; }
+        .tab-btn.active { background: #337ab7; color: white; border-color: #2e6da4; }
+
+        .controls { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+        .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        
+        .btn-record { background: linear-gradient(to bottom, #f0ad4e, #eea236); color: white; font-weight: bold; padding: 6px; border: 1px solid #d58512; border-radius: 3px; cursor: pointer; font-size: 11px; text-align: center; }
+        .btn-record:active { background: #d58512; }
+        .btn-record:disabled { background: #777; border-color: #555; cursor: not-allowed; opacity: 0.6; }
+
+        .btn-calc { background: linear-gradient(to bottom, #5cb85c, #4cae4c); color: white; font-weight: bold; padding: 8px; border: 1px solid #4cae4c; border-radius: 3px; cursor: pointer; margin-top: 2px; width: 100%; }
+        .btn-calc:disabled { background: #555; border-color: #444; cursor: not-allowed; }
+
+        .jog-panel { background: #e0e0e0; border: 1px solid #bbb; border-radius: 5px; padding: 5px; display: grid; grid-template-columns: 40px 1fr 1fr; gap: 3px; align-items: center; }
+        .jog-header-row { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 2px; }
+        .jog-title { font-size: 12px; font-weight: bold; color: #555; }
+        
+        .coord-btn { background: #333; color: cyan; border: 1px solid #000; padding: 2px 8px; font-size: 10px; border-radius: 3px; cursor: pointer; font-family: monospace; }
+        .coord-btn:hover { background: #555; }
+
+        .axis-label { background: #555; color: white; text-align: center; font-size: 11px; padding: 8px 0; border-radius: 3px; font-weight: bold; }
+        .axis-label.world-x { background: #b71c1c; } 
+        .axis-label.world-y { background: #1b5e20; } 
+        .axis-label.world-z { background: #0d47a1; } 
+
+        .jog-btn { background: #f8f8f8; border: 1px solid #999; border-radius: 3px; padding: 6px; font-weight: bold; cursor: pointer; font-family: monospace; font-size: 14px; }
+        .jog-btn:active { background: #337ab7; color: white; border-color: #2e6da4; }
+
+        .speed-box { display: flex; align-items: center; background: #ddd; padding: 4px; border-radius: 4px; border: 1px solid #bbb; }
+        .speed-label { font-size: 11px; font-weight: bold; margin-right: 5px; color: #333; }
+        input[type=range] { flex: 1; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <!-- 1. 左侧：3D 视口 -->
+    <div id="canvas-container">
+        <div id="overlay">
+            <div class="title">工业机器人坐标系建立 (Python PBL 版)</div>
+            <div class="subtitle">黑龙江八一农垦大学版权所有</div>
+            
+            <div class="task-box" id="task-box">
+                <div style="padding:10px; text-align:center;">正在初始化...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 2. 中间：Python 编程面板 -->
+    <div id="python-panel">
+        <div class="py-header">
+            <span>🐍 Python PBL 算法编程区</span>
+            <span id="env-status">环境加载中...</span>
+        </div>
+        <div style="font-size:12px; color:#aaa; margin-bottom:10px;">
+            学习目标：使用<b>列表 (List)</b> 定义6个独立的坐标点位，通过 <b>For循环</b> 单独控制机器人完成工具坐标系（6点法）的标定验证。
+        </div>
+        <textarea id="py-code" disabled>
+import time
+
+print("--- 启动工具坐标系(6点法)自动标定 ---")
+# 1. 切换到“工具坐标系”任务模式
+robot.set_mode("TOOL")
+time.sleep(1)
+
+# 2. 单独定义 6 个标定点的坐标 [X, Y, Z]
+# 前4点为基准原点，后2点为X向和Z向延伸
+points = [
+    [0.0, 1.32, 0.4],   # 1. 垂直接近点
+    [0.0, 1.32, 0.4],   # 2. 倾斜A接近点
+    [0.0, 1.32, 0.4],   # 3. 倾斜B接近点
+    [0.0, 1.32, 0.4],   # 4. 原点 (ORG)
+    [0.1, 1.32, 0.4],   # 5. X轴正向 (X 增加)
+    [0.0, 1.32, 0.5]    # 6. Z轴正向 (Z 增加)
+]
+point_names = ["垂直", "倾斜A", "倾斜B", "原点", "X向", "Z向"]
+
+# 3. 单独控制每个点位的移动与记录
+for i in range(6):
+    print(f"▶ 步骤 {i+1}: 正在移动至 [{point_names[i]}]")
+    
+    # 提取单独的XYZ坐标
+    target_x = points[i][0]
+    target_y = points[i][1]
+    target_z = points[i][2]
+    
+    # 驱动机器人运动
+    robot.move_tcp(target_x, target_y, target_z)
+    time.sleep(1) # 模拟运动耗时
+    
+    # 记录该单独点位
+    robot.record_point(i)
+    time.sleep(0.5)
+
+print("✅ 6个特征点全部记录完毕！")
+print("--- 计算并建立工具坐标系 ---")
+robot.calculate_frame()
+</textarea>
+        <div class="py-controls">
+            <button id="btn-run-py" class="btn-run-py" disabled onclick="runPythonCode()">▶ 运行标定脚本</button>
+        </div>
+        <div id="py-console">系统启动中，等待加载 3D 引擎与 Python 核心库...</div>
+    </div>
+
+    <!-- 3. 右侧：示教器 -->
+    <div id="pendant">
+        <div style="background:#222; color:#FFD700; padding:6px; text-align:center; font-weight:bold; border-radius:4px 4px 0 0; border:2px solid #000; border-bottom:none;">
+            示教器 (Teach Pendant)
+        </div>
+        
+        <div class="screen-frame">
+            <div id="screen">R-30iB
+> 系统就绪.
+            </div>
+            <div id="status-bar">
+                <span id="coord-disp">COORD: JOINT</span>
+                <span id="pos-disp">X:0.0 Y:0.0 Z:0.0</span>
+            </div>
+        </div>
+
+        <div class="mode-tabs">
+            <div id="tab-tool" class="tab-btn active" onclick="switchMode('TOOL')">工具坐标系 (Tool)</div>
+            <div id="tab-user" class="tab-btn" onclick="switchMode('USER')">用户坐标系 (User)</div>
+        </div>
+
+        <div class="controls">
+            <div id="action-area"></div>
+
+            <div class="jog-panel">
+                <div class="jog-header-row">
+                    <span class="jog-title">运动控制 (手动调试)</span>
+                    <button class="coord-btn" onclick="toggleJogMode()">COORD 切换</button>
+                </div>
+                <div id="jog-buttons-container" style="display:contents;"></div>
+            </div>
+
+            <div class="speed-box">
+                <span class="speed-label">速度:</span>
+                <input type="range" id="speed-slider" min="1" max="100" value="20" title="调整运动速度">
+                <span id="speed-val" style="font-size:11px; width:30px; text-align:right;">20%</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 引入稳定的 CDN 资源 -->
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <script>
+        // ==========================================
+        // 核心变量
+        // ==========================================
+        let scene, camera, renderer, controls;
+        let joints = []; 
+        let jogInterval = null;
+        let jogMode = 'JOINT'; 
+        let currentTask = 'TOOL';
+        
+        let recordedPoints = {
+            TOOL: [null, null, null, null, null, null], 
+            USER: [null, null, null]  
+        };
+        
+        let robotBase, toolTipMesh;
+        let calibrationCone, workTable, userFrameMarkers = [];
+        let createdUserFrameHelper = null;
+        let customWorldAxes = null;
+
+        const axes = ['y', 'x', 'x', 'z', 'x', 'z']; 
+        const limits = [[-2.8,2.8], [-1.5,1.5], [-2.5,2.5], [-3.4,3.4], [-2.0,2.0], [-6.0,6.0]];
+
+        // 页面启动
+        setTimeout(() => {
+            init3D();
+            initPython();
+        }, 500);
+
+        // ==========================================
+        // 供 Python 调用的 API 接口
+        // ==========================================
+        window.py_set_mode = function(mode) {
+            switchMode(mode);
+        };
+
+        window.py_move_tcp = function(x, y, z) {
+            // Three.js 坐标系与工业UI坐标系的映射
+            let targetPos = new THREE.Vector3(x, z, y);
+            
+            // 为了仿真立刻到达，我们连续执行 150 次 CCD 逆解算
+            for(let i=0; i<150; i++) {
+                solveIK(targetPos);
+            }
+            // 强制更新世界矩阵
+            joints.forEach(j => j.updateMatrixWorld(true));
+        };
+
+        window.py_record_point = function(idx) {
+            recordPoint(idx);
+        };
+
+        window.py_calculate = function() {
+            calculateFrame();
+        };
+
+        window.py_print = function(msg) {
+            const pyConsole = document.getElementById('py-console');
+            pyConsole.innerText += msg + "\n";
+            pyConsole.scrollTop = pyConsole.scrollHeight;
+            updateScreen("PY: " + msg);
+        };
+
+        // ==========================================
+        // 原生示教器逻辑与 UI
+        // ==========================================
+        function updateScreen(msg) {
+            const s = document.getElementById('screen');
+            s.innerText += "\n> " + msg;
+            s.scrollTop = s.scrollHeight;
+        }
+
+        function switchMode(task) {
+            currentTask = task;
+            document.getElementById('tab-tool').className = task === 'TOOL' ? 'tab-btn active' : 'tab-btn';
+            document.getElementById('tab-user').className = task === 'USER' ? 'tab-btn active' : 'tab-btn';
+
+            if (task === 'TOOL') recordedPoints.TOOL = [null, null, null, null, null, null];
+            else recordedPoints.USER = [null, null, null];
+            
+            calibrationCone.visible = (task === 'TOOL');
+            workTable.visible = (task === 'USER');
+            
+            if(createdUserFrameHelper) {
+                scene.remove(createdUserFrameHelper);
+                createdUserFrameHelper = null;
+            }
+            renderUI();
+        }
+
+        function toggleJogMode() {
+            jogMode = (jogMode === 'JOINT') ? 'WORLD' : 'JOINT';
+            document.getElementById('coord-disp').innerText = "COORD: " + jogMode;
+            document.getElementById('coord-disp').style.color = (jogMode === 'WORLD') ? '#FFD700' : '#0ff';
+            customWorldAxes.visible = (jogMode === 'WORLD');
+            updateJogButtons();
+            updateScreen("坐标系切换: " + jogMode);
+        }
+
+        function updateJogButtons() {
+            const container = document.getElementById('jog-buttons-container');
+            container.innerHTML = ''; 
+
+            const labels = (jogMode === 'JOINT') 
+                ? ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
+                : ['X', 'Y', 'Z', 'W', 'P', 'R'];
+            
+            const classes = (jogMode === 'JOINT')
+                ? ['','','','','','']
+                : ['world-x', 'world-y', 'world-z', '', '', ''];
+
+            labels.forEach((lbl, i) => {
+                const rowId = i;
+                const divLabel = document.createElement('div');
+                divLabel.className = 'axis-label ' + classes[i];
+                divLabel.innerText = lbl;
+                
+                const btnMinus = document.createElement('button');
+                btnMinus.className = 'jog-btn';
+                btnMinus.innerText = '-';
+                btnMinus.onmousedown = () => startJog(rowId, -1);
+                btnMinus.onmouseup = stopJog;
+                btnMinus.onmouseleave = stopJog;
+
+                const btnPlus = document.createElement('button');
+                btnPlus.className = 'jog-btn';
+                btnPlus.innerText = '+';
+                btnPlus.onmousedown = () => startJog(rowId, 1);
+                btnPlus.onmouseup = stopJog;
+                btnPlus.onmouseleave = stopJog;
+
+                container.appendChild(divLabel);
+                container.appendChild(btnMinus);
+                container.appendChild(btnPlus);
+            });
+        }
+
+        function renderUI() {
+            const box = document.getElementById('task-box');
+            const area = document.getElementById('action-area');
+            let guideHtml = "", btnHtml = "";
+
+            if (currentTask === 'TOOL') {
+                guideHtml = `
+                    <div style="border-bottom:1px solid #555; padding-bottom:5px; margin-bottom:5px; font-weight:bold;">工具坐标系 (6点法)：</div>
+                    <div class="step-row"><span class="step-label">1. 接近点1 (垂直)</span><span class="step-status">${getStatusHtml('TOOL',0)}</span></div>
+                    <div class="step-row"><span class="step-label">2. 接近点2 (倾斜A)</span><span class="step-status">${getStatusHtml('TOOL',1)}</span></div>
+                    <div class="step-row"><span class="step-label">3. 接近点3 (倾斜B)</span><span class="step-status">${getStatusHtml('TOOL',2)}</span></div>
+                    <div style="margin:2px 0; border-top:1px dashed #444;"></div>
+                    <div class="step-row"><span class="step-label">4. 姿态原点 (Org)</span><span class="step-status">${getStatusHtml('TOOL',3)}</span></div>
+                    <div class="step-row"><span class="step-label">5. X轴方向 (XDir)</span><span class="step-status">${getStatusHtml('TOOL',4)}</span></div>
+                    <div class="step-row"><span class="step-label">6. Z轴方向 (ZDir)</span><span class="step-status">${getStatusHtml('TOOL',5)}</span></div>
+                `;
+                btnHtml = `
+                    <div class="btn-grid">
+                        <button class="btn-record" onclick="recordPoint(0)">1. 垂直</button>
+                        <button class="btn-record" onclick="recordPoint(1)">2. 倾斜A</button>
+                        <button class="btn-record" onclick="recordPoint(2)">3. 倾斜B</button>
+                        <button class="btn-record" onclick="recordPoint(3)">4. 原点</button>
+                        <button class="btn-record" onclick="recordPoint(4)">5. X向</button>
+                        <button class="btn-record" onclick="recordPoint(5)">6. Z向</button>
+                    </div>
+                    <button id="btn-done" class="btn-calc" onclick="calculateFrame()" disabled>计算并设定 (EXEC)</button>
+                `;
+            } else {
+                guideHtml = `
+                    <div style="border-bottom:1px solid #555; padding-bottom:5px; margin-bottom:5px; font-weight:bold;">用户坐标系 (3点法)：</div>
+                    <div class="step-row"><span class="step-label">1. 原点 (黄色点)</span><span class="step-status">${getStatusHtml('USER',0)}</span></div>
+                    <div class="step-row"><span class="step-label">2. X轴方向 (红色)</span><span class="step-status">${getStatusHtml('USER',1)}</span></div>
+                    <div class="step-row"><span class="step-label">3. Y轴方向 (绿色)</span><span class="step-status">${getStatusHtml('USER',2)}</span></div>
+                `;
+                btnHtml = `
+                    <button class="btn-record" onclick="recordPoint(0)">记录原点 (ORG)</button>
+                    <button class="btn-record" onclick="recordPoint(1)">记录X轴向 (XX)</button>
+                    <button class="btn-record" onclick="recordPoint(2)">记录Y轴向 (XY)</button>
+                    <button id="btn-done" class="btn-calc" onclick="calculateFrame()" disabled>计算 (EXEC)</button>
+                `;
+            }
+
+            box.innerHTML = guideHtml;
+            area.innerHTML = btnHtml;
+
+            const allDone = recordedPoints[currentTask].every(p => p !== null);
+            const btn = document.getElementById('btn-done');
+            if(btn) btn.disabled = !allDone;
+        }
+
+        function getStatusHtml(mode, idx) {
+            return recordedPoints[mode][idx] ? "<span style='color:#0f0'>OK</span>" : "<span>--</span>";
+        }
+
+        // --- 机器人运动与 IK (逆运动学) ---
+        function startJog(axisIdx, direction) {
+            if(jogInterval) clearInterval(jogInterval);
+            const speedSlider = document.getElementById('speed-slider');
+            
+            jogInterval = setInterval(() => {
+                const speedScale = parseInt(speedSlider.value) / 100;
+
+                if (jogMode === 'JOINT') {
+                    const j = joints[axisIdx];
+                    const axisName = axes[axisIdx];
+                    const step = 0.03 * speedScale * direction;
+                    let val = j.rotation[axisName] + step;
+                    if(val >= limits[axisIdx][0] && val <= limits[axisIdx][1]) {
+                        j.rotation[axisName] = val;
+                    }
+                } else {
+                    if (axisIdx > 2) return; 
+
+                    const currentTCP = new THREE.Vector3();
+                    toolTipMesh.getWorldPosition(currentTCP);
+                    const targetPos = currentTCP.clone();
+                    
+                    const step = 0.05 * speedScale;
+
+                    if (axisIdx === 0) targetPos.x += step * direction; 
+                    if (axisIdx === 1) targetPos.z += step * direction; 
+                    if (axisIdx === 2) targetPos.y += step * direction; 
+
+                    solveIK(targetPos);
+                }
+            }, 20);
+        }
+
+        function stopJog() { clearInterval(jogInterval); }
+
+        function solveIK(targetPosition) {
+            const damping = 0.5; 
+            const loops = 10;    
+            const activeJoints = [4, 3, 2, 1, 0]; 
+
+            for (let k = 0; k < loops; k++) {
+                activeJoints.forEach(i => {
+                    const joint = joints[i];
+                    const jointPos = new THREE.Vector3();
+                    joint.getWorldPosition(jointPos);
+                    
+                    const tcpPos = new THREE.Vector3();
+                    toolTipMesh.getWorldPosition(tcpPos);
+
+                    const toEnd = new THREE.Vector3().subVectors(tcpPos, jointPos);
+                    const toTarget = new THREE.Vector3().subVectors(targetPosition, jointPos);
+
+                    const axisChar = axes[i];
+                    const jointQuat = new THREE.Quaternion();
+                    joint.getWorldQuaternion(jointQuat);
+                    
+                    const axisVec = new THREE.Vector3();
+                    if(axisChar === 'x') axisVec.set(1,0,0);
+                    if(axisChar === 'y') axisVec.set(0,1,0); 
+                    if(axisChar === 'z') axisVec.set(0,0,1);
+                    
+                    axisVec.applyQuaternion(jointQuat).normalize();
+                    toEnd.projectOnPlane(axisVec).normalize();
+                    toTarget.projectOnPlane(axisVec).normalize();
+
+                    let angle = toEnd.angleTo(toTarget);
+                    const cross = new THREE.Vector3().crossVectors(toEnd, toTarget);
+                    if (cross.dot(axisVec) < 0) angle = -angle;
+
+                    const newAngle = joint.rotation[axisChar] + (angle * damping);
+
+                    if (newAngle >= limits[i][0] && newAngle <= limits[i][1]) {
+                        joint.rotation[axisChar] = newAngle;
+                    }
+                    joint.updateMatrixWorld(true);
+                });
+            }
+        }
+
+        function recordPoint(idx) {
+            const tcpPos = new THREE.Vector3();
+            toolTipMesh.getWorldPosition(tcpPos);
+            let isValid = false;
+            let targetPos = new THREE.Vector3();
+
+            if (currentTask === 'TOOL') {
+                if (idx < 4) {
+                    const coneTip = new THREE.Vector3(0, 0.2, 0); 
+                    targetPos = coneTip.applyMatrix4(calibrationCone.matrixWorld);
+                    if(tcpPos.distanceTo(targetPos) < 0.1) isValid = true; 
+                    else { updateScreen("距离太远! 需接触针尖"); return; }
+                } else isValid = true;
+            } else {
+                const marker = userFrameMarkers[idx];
+                marker.getWorldPosition(targetPos);
+                if(tcpPos.distanceTo(targetPos) < 0.1) isValid = true;
+                else { updateScreen("距离太远! 需对准标记"); return; }
+            }
+
+            if(isValid) {
+                recordedPoints[currentTask][idx] = tcpPos.clone();
+                updateScreen(`点 ${idx+1} 已记录.`);
+                renderUI();
+            }
+        }
+
+        function calculateFrame() {
+            const pts = recordedPoints[currentTask];
+            if (currentTask === 'TOOL') {
+                updateScreen("计算中...");
+                setTimeout(() => {
+                    updateScreen("Tool Frame 更新成功.");
+                    updateScreen("TCP: X:0.0 Y:0.0 Z:220.0");
+                }, 500);
+            } else {
+                const pOrg = pts[0], pXX = pts[1], pXY = pts[2];
+                const vx = new THREE.Vector3().subVectors(pXX, pOrg).normalize();
+                const v_temp = new THREE.Vector3().subVectors(pXY, pOrg).normalize();
+                const vz = new THREE.Vector3().crossVectors(vx, v_temp).normalize();
+                const vy = new THREE.Vector3().crossVectors(vz, vx).normalize();
+
+                updateScreen("计算中...");
+                setTimeout(() => {
+                    updateScreen("User Frame 更新成功.");
+                    if(createdUserFrameHelper) scene.remove(createdUserFrameHelper);
+                    createdUserFrameHelper = new THREE.AxesHelper(0.3);
+                    const matrix = new THREE.Matrix4();
+                    matrix.makeBasis(vx, vy, vz);
+                    matrix.setPosition(pOrg);
+                    createdUserFrameHelper.applyMatrix4(matrix); 
+                    scene.add(createdUserFrameHelper);
+                    window.py_print("✨ 用户坐标系生成完成！(仿真中已显示本地XYZ轴)");
+                }, 500);
+            }
+        }
+
+        // ==========================================
+        // Pyodide 环境初始化
+        // ==========================================
+        let pyodide;
+        async function initPython() {
+            const consoleEl = document.getElementById('py-console');
+            try {
+                if (typeof loadPyodide === 'undefined') throw new Error("外部 Python 引擎加载失败。");
+                while (!window.pyodide) await new Promise(r=>setTimeout(r,50));
+                pyodide = window.pyodide;
+                
+                await pyodide.runPythonAsync(`
+                    import js
+                    class RobotController:
+                        def set_mode(self, mode):
+                            js.py_set_mode(mode)
+                        def move_tcp(self, x, y, z):
+                            js.py_move_tcp(x, y, z)
+                        def record_point(self, idx):
+                            js.py_record_point(idx)
+                        def calculate_frame(self):
+                            js.py_calculate()
+                    
+                    robot = RobotController()
+                `);
+                
+                consoleEl.innerText = "✅ Python 教学环境就绪！";
+                document.getElementById('env-status').innerText = "✔️ 环境就绪";
+                document.getElementById('env-status').style.color = "#4caf50";
+                document.getElementById('py-code').disabled = false;
+                document.getElementById('btn-run-py').disabled = false;
+            } catch (err) {
+                consoleEl.innerText = "❌ Python 初始化失败: " + err;
+            }
+        }
+
+        async function runPythonCode() {
+            const code = document.getElementById('py-code').value;
+            document.getElementById('py-console').innerText = ""; 
+            window.py_print("正在编译并下发算法序列...");
+            try {
+                pyodide.setStdout({ batched: (str) => window.py_print(str) });
+                await pyodide.runPythonAsync(code);
+            } catch (err) {
+                window.py_print("🐍 代码错误:\n" + err);
+            }
+        }
+
+        // ==========================================
+        // 程序化纹理与环境贴图（PBR 外观升级用，仅影响外观）
+        // ==========================================
+        function createBrushedMetalTex(hex) {
+            const c = document.createElement('canvas');
+            c.width = 256; c.height = 256;
+            const ctx = c.getContext('2d');
+            ctx.fillStyle = hex;
+            ctx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 600; i++) {
+                const y = Math.random() * 256;
+                ctx.strokeStyle = `rgba(255,255,255,${Math.random() * 0.12})`;
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+            }
+            for (let i = 0; i < 300; i++) {
+                const y = Math.random() * 256;
+                ctx.strokeStyle = `rgba(0,0,0,${Math.random() * 0.08})`;
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(256, y + (Math.random()-0.5)*2); ctx.stroke();
+            }
+            const tex = new THREE.CanvasTexture(c);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            return tex;
+        }
+        function createEnvTexture() {
+            const c = document.createElement('canvas');
+            c.width = 512; c.height = 256;
+            const ctx = c.getContext('2d');
+            const grad = ctx.createLinearGradient(0, 0, 0, 256);
+            grad.addColorStop(0, '#667788');
+            grad.addColorStop(0.4, '#556677');
+            grad.addColorStop(0.5, '#445566');
+            grad.addColorStop(1, '#2a3848');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 512, 256);
+            ctx.fillStyle = 'rgba(255,250,230,0.4)';
+            ctx.beginPath(); ctx.arc(80, 50, 60, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'rgba(200,220,255,0.25)';
+            ctx.beginPath(); ctx.arc(380, 70, 45, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.beginPath(); ctx.arc(250, 40, 30, 0, Math.PI*2); ctx.fill();
+            const tex = new THREE.CanvasTexture(c);
+            tex.mapping = THREE.EquirectangularReflectionMapping;
+            return tex;
+        }
+
+        // ==========================================
+        // Three.js 3D 渲染 (场景与机器人)
+        // ==========================================
+        function init3D() {
+            try {
+                const container = document.getElementById('canvas-container');
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x2a2a2a);
+                scene.add(new THREE.GridHelper(10, 10, 0x555555, 0x333333));
+
+                camera = new THREE.PerspectiveCamera(45, container.offsetWidth/container.offsetHeight, 0.1, 100);
+                camera.position.set(2.5, 2.0, 2.5); camera.lookAt(0, 0.7, 0.5);
+
+                renderer = new THREE.WebGLRenderer({antialias: true});
+                renderer.setSize(container.offsetWidth, container.offsetHeight);
+                renderer.shadowMap.enabled = true;
+                renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                renderer.outputEncoding = THREE.sRGBEncoding;
+                renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                renderer.toneMappingExposure = 1.0;
+                renderer.physicallyCorrectLights = true;
+                container.appendChild(renderer.domElement);
+
+                // === 环境贴图（PBR 金属反射用） ===
+                const envTex = createEnvTexture();
+                const pmrem = new THREE.PMREMGenerator(renderer);
+                pmrem.compileEquirectangularShader();
+                scene.environment = pmrem.fromEquirectangular(envTex).texture;
+
+                // === 灯光系统（半球光+主光+补光+轮廓光） ===
+                scene.add(new THREE.HemisphereLight(0x88aacc, 0x3a3a3a, 0.45));
+                const dl = new THREE.DirectionalLight(0xffffff, 1.2);
+                dl.position.set(5, 10, 8);
+                dl.castShadow = true;
+                dl.shadow.mapSize.width = 2048;
+                dl.shadow.mapSize.height = 2048;
+                dl.shadow.camera.near = 1;
+                dl.shadow.camera.far = 30;
+                dl.shadow.camera.left = -5;
+                dl.shadow.camera.right = 5;
+                dl.shadow.camera.top = 5;
+                dl.shadow.camera.bottom = -5;
+                dl.shadow.bias = -0.0005;
+                scene.add(dl);
+                const fillLight = new THREE.DirectionalLight(0xaaccff, 0.35);
+                fillLight.position.set(-6, 6, -4);
+                scene.add(fillLight);
+                const rimLight = new THREE.DirectionalLight(0xffddaa, 0.3);
+                rimLight.position.set(-4, 4, -8);
+                scene.add(rimLight);
+
+                if(THREE.OrbitControls) {
+                    controls = new THREE.OrbitControls(camera, renderer.domElement);
+                    controls.target.set(0, 0.7, 0.5);
+                    controls.enableDamping = true;
+                }
+
+                buildEnvironment();
+                buildRobot();
+                // 为整机开启投影（仅外观，不影响逻辑）
+                scene.traverse(function(obj) {
+                    if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
+                });
+
+                document.getElementById('speed-slider').oninput = function() {
+                    document.getElementById('speed-val').innerText = this.value + "%";
+                };
+
+                switchMode('TOOL');
+                updateJogButtons(); 
+
+                const animate = function() {
+                    requestAnimationFrame(animate);
+                    if(controls) controls.update();
+                    if (toolTipMesh) {
+                        const pos = new THREE.Vector3();
+                        toolTipMesh.getWorldPosition(pos);
+                        // UI 显示转换 (使界面符合工业机器人习惯)
+                        document.getElementById('pos-disp').innerText = 
+                            `X:${pos.x.toFixed(3)} Y:${pos.z.toFixed(3)} Z:${pos.y.toFixed(3)}`;
+                    }
+                    renderer.render(scene, camera);
+                };
+                animate();
+            } catch(e) { alert("3D模型加载异常: " + e); }
+        }
+
+        function buildEnvironment() {
+            customWorldAxes = new THREE.Group();
+            customWorldAxes.position.set(-1.2, 0, 0.8);
+            scene.add(customWorldAxes);
+            const matR = new THREE.MeshBasicMaterial({color:0xff0000});
+            const matG = new THREE.MeshBasicMaterial({color:0x00ff00});
+            const matB = new THREE.MeshBasicMaterial({color:0x0088ff});
+            customWorldAxes.add(new THREE.Mesh(new THREE.SphereGeometry(0.04), new THREE.MeshBasicMaterial({color:0xffffff})));
+
+            const arrowX = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5), matR); arrowX.rotation.z = -Math.PI/2; arrowX.position.x = 0.25; customWorldAxes.add(arrowX);
+            const coneX = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.1), matR); coneX.rotation.z = -Math.PI/2; coneX.position.x = 0.5; customWorldAxes.add(coneX);
+            
+            const arrowY = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5), matG); arrowY.rotation.x = Math.PI/2; arrowY.position.z = 0.25; customWorldAxes.add(arrowY);
+            const coneY = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.1), matG); coneY.rotation.x = Math.PI/2; coneY.position.z = 0.5; customWorldAxes.add(coneY);
+            
+            const arrowZ = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.5), matB); arrowZ.position.y = 0.25; customWorldAxes.add(arrowZ);
+            const coneZ = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.1), matB); coneZ.position.y = 0.5; customWorldAxes.add(coneZ);
+            customWorldAxes.visible = false; 
+
+            calibrationCone = new THREE.Mesh(new THREE.ConeGeometry(0.02, 0.4, 16), new THREE.MeshPhongMaterial({color: 0x00aaff}));
+            calibrationCone.position.set(0, 0.2, 1.32); scene.add(calibrationCone);
+            const tip = new THREE.Mesh(new THREE.SphereGeometry(0.01), new THREE.MeshBasicMaterial({color:0xffffff}));
+            tip.position.y = 0.2; calibrationCone.add(tip);
+
+            workTable = new THREE.Group();
+            workTable.position.set(0, 0.4, 1.25);
+            scene.add(workTable);
+            workTable.add(new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.4), new THREE.MeshPhongMaterial({color:0x888888})));
+            
+            function createMarker(x, y, z, color) {
+                const m = new THREE.Mesh(new THREE.SphereGeometry(0.015), new THREE.MeshBasicMaterial({color: color}));
+                m.position.set(x, y, z);
+                workTable.add(m);
+                userFrameMarkers.push(m);
+            }
+            createMarker(-0.2, 0.03, 0.15, 0xffff00); // ORG
+            createMarker(0.2, 0.03, 0.15, 0xff0000);  // XX
+            createMarker(-0.2, 0.03, -0.15, 0x00ff00); // XY
+        }
+        
+        function buildRobot() {
+            // 工业精细版 6 轴机器人（【7】同款风格，末端工具与 toolTipMesh 保持原样）
+            const brushedYellowTex = createBrushedMetalTex('#e89500');
+            const brushedAluTex = createBrushedMetalTex('#b8bcc0');
+            const matYellow  = new THREE.MeshStandardMaterial({ color: 0xe89500, metalness: 0.5, roughness: 0.35, map: brushedYellowTex });
+            const matDark    = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, metalness: 0.6, roughness: 0.4 });
+            const matHousing = new THREE.MeshStandardMaterial({ color: 0x3a3a3a, metalness: 0.5, roughness: 0.5 });
+            const matAlu     = new THREE.MeshStandardMaterial({ color: 0xb8bcc0, metalness: 0.9, roughness: 0.25, map: brushedAluTex });
+            const matPlastic = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.2, roughness: 0.7 });
+
+            function addBolt(parent, x, y, z, r, rotAxis) {
+                const bolt = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.035, 6), matAlu);
+                if (rotAxis === 'x') bolt.rotation.z = Math.PI / 2;
+                else if (rotAxis === 'z') bolt.rotation.x = Math.PI / 2;
+                bolt.position.set(x, y, z);
+                parent.add(bolt);
+            }
+            function addBoltRing(parent, count, radius, y, r) {
+                for (let i = 0; i < count; i++) {
+                    const ang = (i / count) * Math.PI * 2;
+                    addBolt(parent, Math.cos(ang) * radius, y, Math.sin(ang) * radius, r, 'y');
+                }
+            }
+            // 沿 X 轴的关节壳体（轴承环 + 端盖 + 螺栓环）
+            function xAxisJoint(parent, R, L) {
+                const jh = new THREE.Mesh(new THREE.CylinderGeometry(R, R, L, 24), matHousing);
+                jh.rotation.z = Math.PI / 2; parent.add(jh);
+                const ringA = new THREE.Mesh(new THREE.TorusGeometry(R * 0.88, 0.016, 8, 24), matAlu);
+                ringA.rotation.y = Math.PI / 2; ringA.position.x = L * 0.38; parent.add(ringA);
+                const ringB = ringA.clone(); ringB.position.x = -L * 0.38; parent.add(ringB);
+                const capR = R * 0.55;
+                const capA = new THREE.Mesh(new THREE.CylinderGeometry(capR, capR, 0.025, 16), matDark);
+                capA.rotation.z = Math.PI / 2; capA.position.x = L / 2; parent.add(capA);
+                addBolt(parent, L / 2 + 0.012, 0, 0, 0.02, 'x');
+                const capB = capA.clone(); capB.position.x = -L / 2; parent.add(capB);
+                addBolt(parent, -L / 2 - 0.012, 0, 0, 0.02, 'x');
+                for (let i = 0; i < 6; i++) {
+                    const ba = (i / 6) * Math.PI * 2;
+                    addBolt(parent, L / 2, Math.cos(ba) * R * 0.72, Math.sin(ba) * R * 0.72, 0.012, 'x');
+                }
+            }
+
+            robotBase = new THREE.Group(); scene.add(robotBase);
+
+            // ============ 固定基座 ============
+            const basePlate = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.28, 0.05, 32), matDark);
+            basePlate.position.y = 0.025; robotBase.add(basePlate);
+            addBoltRing(robotBase, 8, 0.235, 0.03, 0.013);
+            const baseHousing = new THREE.Mesh(new THREE.CylinderGeometry(0.195, 0.235, 0.14, 32), matHousing);
+            baseHousing.position.y = 0.115; robotBase.add(baseHousing);
+            for (let f = 0; f < 8; f++) {
+                const fa = (f / 8) * Math.PI * 2;
+                const fin = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.1, 0.045), matHousing);
+                fin.position.set(Math.cos(fa) * 0.23, 0.115, Math.sin(fa) * 0.23);
+                fin.rotation.y = -fa; robotBase.add(fin);
+            }
+            const baseRing = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.016, 8, 32), matAlu);
+            baseRing.rotation.x = Math.PI / 2; baseRing.position.y = 0.185; robotBase.add(baseRing);
+
+            // ============ J1 回转腰座（Y 轴） ============
+            const j1 = new THREE.Group(); robotBase.add(j1);
+            const turntable = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.195, 0.10, 32), matYellow);
+            turntable.position.y = 0.245; j1.add(turntable);
+            const waist = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.175, 0.24, 32), matYellow);
+            waist.position.y = 0.40; j1.add(waist);
+            const waistBand = new THREE.Mesh(new THREE.CylinderGeometry(0.178, 0.178, 0.06, 32), matDark);
+            waistBand.position.y = 0.40; j1.add(waistBand);
+            const waistCapT = new THREE.Mesh(new THREE.CylinderGeometry(0.160, 0.160, 0.035, 32), matHousing);
+            waistCapT.position.y = 0.46; j1.add(waistCapT);
+            const waistCapB = new THREE.Mesh(new THREE.CylinderGeometry(0.160, 0.160, 0.035, 32), matHousing);
+            waistCapB.position.y = 0.32; j1.add(waistCapB);
+
+            // ============ J2 肩关节（X 轴）/ 大臂前倾约17°（工业机初始姿态） ============
+            const j2 = new THREE.Group(); j2.position.set(0, 0.50, 0); j1.add(j2);
+            xAxisJoint(j2, 0.19, 0.40);
+            const arm2 = new THREE.Group(); arm2.rotation.x = 0.30; j2.add(arm2);
+            const upperArm = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.75, 0.22), matYellow);
+            upperArm.position.y = 0.375; arm2.add(upperArm);
+            const armGroove = new THREE.Mesh(new THREE.BoxGeometry(0.232, 0.50, 0.06), matDark);
+            armGroove.position.y = 0.375; arm2.add(armGroove);
+            const armCapT = new THREE.Mesh(new THREE.BoxGeometry(0.236, 0.04, 0.08), matHousing);
+            armCapT.position.y = 0.62; arm2.add(armCapT);
+            const armCapB = new THREE.Mesh(new THREE.BoxGeometry(0.236, 0.04, 0.08), matHousing);
+            armCapB.position.y = 0.22; arm2.add(armCapB);
+
+            // ============ J3 肘关节（X 轴）/ 小臂保持水平（初始姿态） ============
+            const j3 = new THREE.Group(); j3.position.set(0, 0.75, 0); arm2.add(j3);
+            xAxisJoint(j3, 0.15, 0.32);
+            const arm3 = new THREE.Group(); arm3.rotation.x = -0.30; j3.add(arm3);
+            const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.55), matYellow);
+            forearm.position.z = 0.31; arm3.add(forearm);
+            const fgroove = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.192, 0.48), matDark);
+            fgroove.position.z = 0.31; arm3.add(fgroove);
+            const fcapA = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.196, 0.04), matHousing);
+            fcapA.position.z = 0.07; arm3.add(fcapA);
+            const fcapB = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.196, 0.04), matHousing);
+            fcapB.position.z = 0.55; arm3.add(fcapB);
+
+            // ============ J4 腕回转（Z 轴） ============
+            const j4 = new THREE.Group(); j4.position.set(0, 0, 0.60); arm3.add(j4);
+            const j4Hub = new THREE.Mesh(new THREE.CylinderGeometry(0.10, 0.10, 0.16, 24), matHousing);
+            j4Hub.rotation.x = Math.PI / 2; j4Hub.position.z = 0.02; j4.add(j4Hub);
+            const j4Ring = new THREE.Mesh(new THREE.TorusGeometry(0.086, 0.013, 8, 24), matAlu);
+            j4Ring.position.z = 0.10; j4.add(j4Ring);
+            const wristArm = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.07, 0.36, 20), matYellow);
+            wristArm.rotation.x = Math.PI / 2; wristArm.position.z = 0.30; j4.add(wristArm);
+
+            // ============ J5 腕俯仰（X 轴） ============
+            const j5 = new THREE.Group(); j5.position.set(0, 0, 0.50); j4.add(j5);
+            xAxisJoint(j5, 0.09, 0.22);
+
+            // ============ J6 法兰（Z 轴）/ 腕部下折90°，法兰与工具朝下（工业机初始姿态） ============
+            const arm5 = new THREE.Group(); arm5.rotation.x = Math.PI / 2; j5.add(arm5);
+            const j6 = new THREE.Group(); j6.position.set(0, 0, 0.08); arm5.add(j6);
+            const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.085, 0.05, 24), matAlu);
+            flange.rotation.x = Math.PI / 2; flange.position.z = 0.01; j6.add(flange);
+            for (let i = 0; i < 6; i++) {
+                const a = (i / 6) * Math.PI * 2;
+                addBolt(j6, Math.cos(a) * 0.055, Math.sin(a) * 0.055, 0.04, 0.009, 'z');
+            }
+            const toolGeo = new THREE.ConeGeometry(0.02, 0.2, 16); toolGeo.translate(0, 0.1, 0); toolGeo.rotateX(Math.PI/2);
+            const toolMesh = new THREE.Mesh(toolGeo, new THREE.MeshStandardMaterial({ color: 0xff3333, metalness: 0.3, roughness: 0.35 }));
+            toolMesh.position.z = 0.02; j6.add(toolMesh);
+
+            toolTipMesh = new THREE.Mesh(new THREE.SphereGeometry(0.015, 8, 8), new THREE.MeshBasicMaterial({color:0x00ff00}));
+            toolTipMesh.position.set(0, 0, 0.22); j6.add(toolTipMesh);
+            joints = [j1, j2, j3, j4, j5, j6];
+        }
+
+        window.addEventListener('resize', () => {
+            const c = document.getElementById('canvas-container');
+            if(camera && renderer) {
+                camera.aspect = c.offsetWidth / c.offsetHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(c.offsetWidth, c.offsetHeight);
+            }
+        });
+    </script>
+</body>
+</html>
