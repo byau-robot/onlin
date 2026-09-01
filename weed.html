@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>杂草识别系统 · 浏览器 ONNX 推理</title>
+    <style>
+        * { box-sizing: border-box; font-family: system-ui, "Microsoft YaHei", sans-serif; }
+        body { max-width: 1000px; margin: 30px auto; padding: 0 20px; background: #f5f7fa; color: #222; }
+        .box { background: #fff; padding: 24px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+        h2 { margin-top: 0; }
+        #file { margin: 10px 0; }
+        #resultImg { max-width: 100%; border: 1px solid #ccc; margin: 10px 0; border-radius: 8px; }
+        .log { padding: 12px; background: #f7f9fa; border: 1px solid #ddd; border-radius: 8px; white-space: pre-wrap; min-height: 140px; margin-top: 10px; font-size: 14px; line-height: 1.7; }
+        .tip { font-size: 12.5px; color: #888; margin-top: 14px; line-height: 1.7; }
+        #modelState { font-size: 13px; color: #0a7d32; margin: 6px 0 0; }
+        .upload-area { margin: 12px 0; }
+        #imgPlaceholder {
+            max-width: 100%; min-height: 160px;
+            border: 1px dashed #cbd5e1; margin: 10px 0; border-radius: 8px;
+            color: #94a3b8; display: flex; align-items: center; justify-content: center;
+            font-size: 14px; flex-direction: column; gap: 6px;
+        }
+        #imgPlaceholder span { opacity: 0.7; }
+        .badge { background: #eef2f6; padding: 2px 12px; border-radius: 20px; font-size: 13px; color: #1e293b; }
+        .flex-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+<div class="box">
+    <div class="flex-row">
+        <h2>🌱 杂草检测系统</h2>
+        <span class="badge">ONNX · 纯前端</span>
+    </div>
+    <div id="modelState">⏳ 初始化推理引擎…</div>
+
+    <div class="upload-area">
+        <input type="file" id="file" accept="image/*">
+    </div>
+
+    <div>
+        <img id="resultImg" alt="识别结果"
+             style="display:none; max-width:100%; border:1px solid #ccc; margin:10px 0; border-radius:8px; background: #fafafa;" />
+        <div id="imgPlaceholder">
+            <span>📤 上传图片即可识别</span>
+            <span style="font-size:12px; color:#b0b8c4;">支持 JPG / PNG / WebP</span>
+        </div>
+    </div>
+
+    <h4>📋 检测输出信息</h4>
+    <div class="log" id="log">等待上传图片</div>
+    <div class="tip">
+        <strong>推理说明：</strong> 浏览器直接运行 YOLOv8 ONNX 模型 (<code>best.onnx</code>)，
+        无需服务器。首次加载模型约 10~15 MB，之后浏览器缓存。<br>
+        置信度阈值 0.30 · NMS IoU 阈值 0.45 · 输入尺寸 640×640。
+    </div>
+</div>
+
+<!-- 使用相对路径加载 onnxruntime (与模型同目录) -->
+<script src="ort/ort.min.js"></script>
+<script>
+    (function() {
+        "use strict";
+
+        // ====== 配置 ======
+        const CONF_THRESHOLD = 0.30;
+        const IOU_THRESHOLD  = 0.45;
+        const INPUT_SIZE     = 640;
+        const CLASS_NAMES    = ["crop", "weed"];
+
+        // ====== DOM 引用 ======
+        const fileInput = document.getElementById('file');
+        const resultImg = document.getElementById('resultImg');
+        const logBox = document.getElementById('log');
+        const modelState = document.getElementById('modelState');
+        const placeholder = document.getElementById('imgPlaceholder');
+
+        // ====== ONNX Runtime 配置 (关键修复) ======
+        // 明确指定 wasm 路径为当前目录下的 ort/ 文件夹 (与 ort.min.js 同级)
+        // 如果 ort.min.js 在 /ort/ 下，则 wasm 也放在 /ort/ 下，路径用相对路径 './ort/'
+        // 但 onnxruntime 内部拼接规则：如果设置 wasmPaths 为 './ort/'，它会从当前页面路径解析。
+        // 对于 GitHub Pages 部署，我们使用相对于根目录的绝对路径 '/ort/' 更可靠。
+        // 但由于项目可能部署在子目录 (如 /onlin/)，我们动态计算 base path。
+        function getBasePath() {
+            // 获取当前脚本所在目录 (或当前页面目录)
+            const scripts = document.getElementsByTagName('script');
+            // 取最后一个 script (当前内联脚本) 的 baseURI 或使用 document.baseURI
+            const base = document.baseURI || window.location.href;
+            // 如果部署在子目录，比如 https://byau-robot.github.io/onlin/ ，则 base 包含 /onlin/
+            // 我们需要截取到最后一个 '/' 作为路径前缀
+            const path = base.substring(0, base.lastIndexOf('/') + 1);
+            return path;
+        }
+
+        // 设置 wasm 路径: 使用绝对路径 (相对于站点根) 或相对路径。
+        // 因为所有文件都放在根目录 (或同一级)，我们直接使用 '/ort/' (从域名根开始)
+        // 但如果部署在子目录 '/onlin/'，则 '/ort/' 会指向 https://byau-robot.github.io/ort/ 而不是 /onlin/ort/
+        // 因此我们动态调整为当前路径下的 ort 目录。
+        const basePath = (() => {
+            // 尝试从当前页面路径推断，如果当前 URL 包含 '/onlin/' 则使用 '/onlin/ort/'
+            const url = window.location.href;
+            // 如果部署在子目录，如 https://byau-robot.github.io/onlin/ 或 /onlin/index.html
+            // 取 pathname 去掉末尾文件名
+            let pathname = window.location.pathname;
+            if (pathname.endsWith('/')) {
+                // 目录形式
+            } else {
+                // 文件形式，去掉最后一个 / 之后的内容
+                const lastSlash = pathname.lastIndexOf('/');
+                if (lastSlash > 0) {
+                    pathname = pathname.substring(0, lastSlash + 1);
+                } else {
+                    pathname = '/';
+                }
+            }
+            // 拼接 ort 路径
+            return pathname + 'ort/';
+        })();
+
+        // 设置 ort 环境变量
+        ort.env.wasm.numThreads = 1;
+        ort.env.wasm.wasmPaths = basePath;   // 例如 '/onlin/ort/' 或 '/ort/'
+
+        // 调试输出 (可在控制台查看)
+        console.log('[Weed] wasmPaths =', ort.env.wasm.wasmPaths);
+        console.log('[Weed] basePath =', basePath);
+
+        // ====== 模型加载 ======
+        let session = null;
+        let sessionReady = null;
+
+        function loadModel() {
+            if (sessionReady) return sessionReady;
+
+            modelState.innerText = '⏳ 加载推理引擎与模型 (首次约 10~15 MB) …';
+            modelState.style.color = '#2563eb';
+
+            // 模型文件 best.onnx 与 html 在同一目录 (根目录或 /onlin/ 下)
+            // 使用相对路径 './best.onnx' 或者基于当前路径
+            const modelUrl = './best.onnx';
+
+            sessionReady = ort.InferenceSession.create(modelUrl, {
+                executionProviders: ['wasm']
+            }).then(sess => {
+                session = sess;
+                modelState.innerText = '✅ 模型就绪 (输入: ' + sess.inputNames[0] + ', 输出: ' + sess.outputNames[0] + ')';
+                modelState.style.color = '#0a7d32';
+                return sess;
+            }).catch(err => {
+                sessionReady = null;
+                modelState.innerText = '❌ 模型加载失败: ' + err.message;
+                modelState.style.color = '#e11d48';
+                console.error('[Weed] model load error:', err);
+                throw err;
+            });
+
+            return sessionReady;
+        }
+
+        // 预加载
+        loadModel().catch(() => {});
+
+        // ====== 图像预处理 ======
+        function letterbox(img) {
+            const scale = Math.min(INPUT_SIZE / img.width, INPUT_SIZE / img.height);
+            const newW = Math.round(img.width * scale);
+            const newH = Math.round(img.height * scale);
+            const padX = Math.floor((INPUT_SIZE - newW) / 2);
+            const padY = Math.floor((INPUT_SIZE - newH) / 2);
+
+            const cv = document.createElement('canvas');
+            cv.width = INPUT_SIZE;
+            cv.height = INPUT_SIZE;
+            const ctx = cv.getContext('2d');
+            ctx.fillStyle = '#727272';
+            ctx.fillRect(0, 0, INPUT_SIZE, INPUT_SIZE);
+            ctx.drawImage(img, padX, padY, newW, newH);
+            return { canvas: cv, scale: scale, padX: padX, padY: padY };
+        }
+
+        function preprocess(canvas) {
+            const ctx = canvas.getContext('2d');
+            const imageData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+            const data = imageData.data;
+            const ch = INPUT_SIZE * INPUT_SIZE;
+            const out = new Float32Array(3 * ch);
+
+            for (let i = 0; i < ch; i++) {
+                out[i]          = data[i * 4]     / 255.0; // R
+                out[ch + i]     = data[i * 4 + 1] / 255.0; // G
+                out[2 * ch + i] = data[i * 4 + 2] / 255.0; // B
+            }
+            return new ort.Tensor('float32', out, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+        }
+
+        // ====== NMS ======
+        function nms(dets, iouThr) {
+            dets.sort((a, b) => b.conf - a.conf);
+            const keep = [];
+            while (dets.length) {
+                const best = dets.shift();
+                keep.push(best);
+                dets = dets.filter(d => iou(best, d) < iouThr);
+            }
+            return keep;
+        }
+
+        function iou(a, b) {
+            const x1 = Math.max(a.x1, b.x1), y1 = Math.max(a.y1, b.y1);
+            const x2 = Math.min(a.x2, b.x2), y2 = Math.min(a.y2, b.y2);
+            const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+            const areaA = (a.x2 - a.x1) * (a.y2 - a.y1);
+            const areaB = (b.x2 - b.x1) * (b.y2 - b.y1);
+            return inter / (areaA + areaB - inter + 1e-9);
+        }
+
+        // ====== 主流程 ======
+        fileInput.addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // UI 重置
+            resultImg.style.display = 'none';
+            resultImg.src = '';
+            placeholder.style.display = 'flex';
+            placeholder.innerHTML = '<span>⏳ 正在处理…</span>';
+            logBox.innerText = '⏳ 加载模型…';
+
+            let sess;
+            try {
+                sess = await loadModel();
+                if (!sess) throw new Error('模型未就绪');
+                logBox.innerText = '🔍 模型就绪，开始推理…';
+            } catch (err) {
+                logBox.innerText = '❌ 模型加载失败: ' + err.message;
+                placeholder.innerHTML = '<span>⚠️ 模型加载失败，请刷新重试</span>';
+                return;
+            }
+
+            // 读取图片
+            let img;
+            try {
+                const url = URL.createObjectURL(file);
+                img = new Image();
+                img.src = url;
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = () => reject(new Error('图片解码失败'));
+                });
+                // 释放 blob URL
+                URL.revokeObjectURL(url);
+            } catch (err) {
+                logBox.innerText = '❌ 图片读取失败: ' + err.message;
+                placeholder.innerHTML = '<span>📤 请重新选择图片</span>';
+                return;
+            }
+
+            logBox.innerText = '🧠 推理中，请稍候…';
+
+            try {
+                const t0 = performance.now();
+
+                // 预处理
+                const lb = letterbox(img);
+                const inputTensor = preprocess(lb.canvas);
+
+                // 推理
+                const feeds = {};
+                feeds[sess.inputNames[0]] = inputTensor;
+                const output = await sess.run(feeds);
+                const pred = output[sess.outputNames[0]].data;
+                const dims = output[sess.outputNames[0]].dims;  // [1, 6, 8400] 或 [1, nc+4, 8400]
+                const nc = dims[1] - 4;
+                const num = dims[2];
+
+                // 解码
+                const dets = [];
+                for (let i = 0; i < num; i++) {
+                    const cx = pred[i];
+                    const cy = pred[num + i];
+                    const w  = pred[2 * num + i];
+                    const h  = pred[3 * num + i];
+
+                    let bestConf = 0, bestCls = -1;
+                    for (let c = 0; c < nc; c++) {
+                        const conf = pred[(4 + c) * num + i];
+                        if (conf > bestConf) {
+                            bestConf = conf;
+                            bestCls = c;
+                        }
+                    }
+                    if (bestConf < CONF_THRESHOLD) continue;
+
+                    // 映射回原图坐标
+                    const x1 = (cx - w / 2 - lb.padX) / lb.scale;
+                    const y1 = (cy - h / 2 - lb.padY) / lb.scale;
+                    const x2 = (cx + w / 2 - lb.padX) / lb.scale;
+                    const y2 = (cy + h / 2 - lb.padY) / lb.scale;
+
+                    dets.push({
+                        cls: bestCls,
+                        conf: bestConf,
+                        x1: Math.max(0, Math.round(x1)),
+                        y1: Math.max(0, Math.round(y1)),
+                        x2: Math.min(img.width, Math.round(x2)),
+                        y2: Math.min(img.height, Math.round(y2))
+                    });
+                }
+
+                const final = nms(dets, IOU_THRESHOLD);
+
+                // 绘制结果
+                const cv = document.createElement('canvas');
+                cv.width = img.width;
+                cv.height = img.height;
+                const ctx = cv.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+
+                const crops = [], weeds = [];
+                for (const d of final) {
+                    if (d.cls === 1) weeds.push(d);
+                    else crops.push(d);
+
+                    const color = d.cls === 1 ? '#e11d48' : '#16a34a';
+                    const lineWidth = Math.max(2, Math.round(img.width / 400));
+                    ctx.lineWidth = lineWidth;
+                    ctx.strokeStyle = color;
+                    ctx.strokeRect(d.x1, d.y1, d.x2 - d.x1, d.y2 - d.y1);
+
+                    const label = CLASS_NAMES[d.cls] + ' ' + d.conf.toFixed(2);
+                    const fontSize = Math.max(12, Math.round(img.width / 60));
+                    ctx.font = fontSize + 'px sans-serif';
+                    const tw = ctx.measureText(label).width + 8;
+                    const th = fontSize + 6;
+                    ctx.fillStyle = color;
+                    ctx.fillRect(d.x1, Math.max(0, d.y1 - th), tw, th);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(label, d.x1 + 4, Math.max(0, d.y1 - th) + th - 4);
+                }
+
+                resultImg.src = cv.toDataURL('image/jpeg', 0.92);
+                resultImg.style.display = 'block';
+                placeholder.style.display = 'none';
+
+                const elapsed = (performance.now() - t0).toFixed(0);
+                let logText = `✅ 推理完成 (浏览器 ONNX, ${elapsed}ms)\n`;
+                logText += `检测到 农作物 ${crops.length} 处, 杂草 ${weeds.length} 处\n`;
+                if (weeds.length === 0) {
+                    logText += '未检测到杂草 ✅';
+                } else {
+                    weeds.forEach((item, idx) => {
+                        logText += `【杂草${idx+1}】置信度=${item.conf.toFixed(3)}\n`;
+                        logText += `  左上(${item.x1},${item.y1}) 右下(${item.x2},${item.y2})\n`;
+                        logText += `  宽=${item.x2-item.x1} 高=${item.y2-item.y1}\n`;
+                    });
+                }
+                logBox.innerText = logText;
+
+            } catch (err) {
+                console.error('[Weed] inference error:', err);
+                logBox.innerText = '❌ 推理出错: ' + err.message;
+                placeholder.style.display = 'flex';
+                placeholder.innerHTML = '<span>⚠️ 推理失败，请重试</span>';
+                resultImg.style.display = 'none';
+            }
+        });
+
+        // 初始状态
+        placeholder.innerHTML = '<span>📤 上传图片即可识别</span><span style="font-size:12px; color:#b0b8c4;">支持 JPG / PNG / WebP</span>';
+        logBox.innerText = '等待上传图片';
+
+        // 如果模型加载成功，更新状态 (但预加载已在上面触发)
+        loadModel().then(() => {
+            // 静默成功
+        }).catch(() => {});
+    })();
+</script>
+</body>
+</html>
